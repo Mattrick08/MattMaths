@@ -380,7 +380,7 @@ function applyGrade(card, grade){
 
 /* ---------------- Data loading ---------------- */
 async function loadDecks(){
-  const { data, error } = await supabase
+  const { data, error } = await sb
     .from('decks')
     .select('*, cards(id, next_review_date)')
     .order('created_at', { ascending: true });
@@ -395,7 +395,7 @@ async function loadDecks(){
 }
 
 async function loadCards(deckId){
-  const { data, error } = await supabase
+  const { data, error } = await sb
     .from('cards')
     .select('*')
     .eq('deck_id', deckId)
