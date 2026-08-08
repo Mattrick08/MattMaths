@@ -316,10 +316,10 @@ select{
 /* ============================================================
    CONFIG — replace with your own Supabase project credentials
    ============================================================ */
-const SUPABASE_URL = "https://uhnfzvhjfgxhdpsfnxws.supabase.co";
-const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InVobmZ6dmhqZmd4aGRwc2ZueHdzIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODYxODA1MDQsImV4cCI6MjEwMTc1NjUwNH0.fb8-rb48yAXfsBbCrEzzXh_Rkp9JCSXKVwEv8q2B1PM";
+const SUPABASE_URL = "YOUR_SUPABASE_URL";
+const SUPABASE_ANON_KEY = "YOUR_SUPABASE_ANON_KEY";
 
-const supabase = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+const sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
 const SUBJECTS = ["Maths","Physique","Chimie","SI","Info","Français","Philo","Anglais","Autre"];
 
@@ -415,13 +415,13 @@ async function handleAuthSubmit(e){
 
   try{
     if(state.authMode === 'signup'){
-      const { error } = await supabase.auth.signUp({ email, password });
+      const { error } = await sb.auth.signUp({ email, password });
       if(error) throw error;
       toast("Compte créé — vérifie tes emails si nécessaire, puis connecte-toi.");
       state.authMode = 'login';
       render();
     } else {
-      const { error } = await supabase.auth.signInWithPassword({ email, password });
+      const { error } = await sb.auth.signInWithPassword({ email, password });
       if(error) throw error;
     }
   }catch(err){
@@ -431,13 +431,13 @@ async function handleAuthSubmit(e){
 }
 
 async function handleLogout(){
-  await supabase.auth.signOut();
+  await sb.auth.signOut();
 }
 
 /* ---------------- Deck CRUD ---------------- */
 async function createDeck(name, subject){
-  const { data: { user } } = await supabase.auth.getUser();
-  const { error } = await supabase.from('decks').insert({ name, subject, user_id: user.id });
+  const { data: { user } } = await sb.auth.getUser();
+  const { error } = await sb.from('decks').insert({ name, subject, user_id: user.id });
   if(error){ toast("Erreur : " + error.message); return; }
   state.showDeckModal = false;
   await loadDecks();
@@ -445,21 +445,21 @@ async function createDeck(name, subject){
 
 async function deleteDeck(deckId){
   if(!confirm("Supprimer ce paquet et toutes ses fiches ?")) return;
-  const { error } = await supabase.from('decks').delete().eq('id', deckId);
+  const { error } = await sb.from('decks').delete().eq('id', deckId);
   if(error){ toast("Erreur : " + error.message); return; }
   await loadDecks();
 }
 
 /* ---------------- Card CRUD ---------------- */
 async function saveCard(front, back, chapter){
-  const { data: { user } } = await supabase.auth.getUser();
+  const { data: { user } } = await sb.auth.getUser();
   if(state.editingCard){
-    const { error } = await supabase.from('cards')
+    const { error } = await sb.from('cards')
       .update({ front, back, chapter })
       .eq('id', state.editingCard.id);
     if(error){ toast("Erreur : " + error.message); return; }
   } else {
-    const { error } = await supabase.from('cards').insert({
+    const { error } = await sb.from('cards').insert({
       deck_id: state.currentDeckId, user_id: user.id, front, back, chapter,
     });
     if(error){ toast("Erreur : " + error.message); return; }
@@ -472,7 +472,7 @@ async function saveCard(front, back, chapter){
 
 async function deleteCard(cardId){
   if(!confirm("Supprimer cette fiche ?")) return;
-  const { error } = await supabase.from('cards').delete().eq('id', cardId);
+  const { error } = await sb.from('cards').delete().eq('id', cardId);
   if(error){ toast("Erreur : " + error.message); return; }
   await loadCards(state.currentDeckId);
   await loadDecks();
@@ -498,7 +498,7 @@ function flipCard(){
 async function gradeCard(grade){
   const card = state.reviewQueue[state.reviewIndex];
   const updates = applyGrade(card, grade);
-  const { error } = await supabase.from('cards').update(updates).eq('id', card.id);
+  const { error } = await sb.from('cards').update(updates).eq('id', card.id);
   if(error) console.error(error);
 
   state.reviewIndex += 1;
@@ -873,7 +873,7 @@ function attachViewHandlers(){
 }
 
 /* ---------------- Boot / auth listener ---------------- */
-supabase.auth.onAuthStateChange(async (event, session) => {
+sb.auth.onAuthStateChange(async (event, session) => {
   if(session?.user){
     state.user = session.user;
     state.view = "dashboard";
@@ -886,7 +886,7 @@ supabase.auth.onAuthStateChange(async (event, session) => {
 });
 
 (async () => {
-  const { data: { session } } = await supabase.auth.getSession();
+  const { data: { session } } = await sb.auth.getSession();
   if(session?.user){
     state.user = session.user;
     state.view = "dashboard";
