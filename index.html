@@ -236,6 +236,31 @@ textarea:focus{ border-color:var(--ink-blue); }
   border:1px dashed var(--grid-line); font-size:14px; min-height:20px;
 }
 .hint{ font-family:'IBM Plex Mono',monospace; font-size:10.5px; color:var(--ink-soft); margin-top:5px; }
+
+/* ---------- Symbol toolbar ---------- */
+.symbol-toolbar{ display:flex; flex-wrap:wrap; gap:5px; margin-bottom:7px; }
+.symbol-btn{
+  font-family:'IBM Plex Mono', monospace; font-size:13px; line-height:1;
+  padding:6px 9px; border-radius:6px; border:1px solid var(--grid-line);
+  background:#fff; color:var(--ink); cursor:pointer; min-width:30px; text-align:center;
+  transition: border-color .12s ease, color .12s ease;
+}
+.symbol-btn:hover{ border-color:var(--ink-blue); color:var(--ink-blue); }
+.symbol-btn.wide{ font-size:11px; padding:6px 8px; }
+
+.bounds-popover{
+  background:var(--paper); border:1px dashed var(--ink-blue);
+  border-radius:8px; padding:12px; margin-bottom:9px;
+}
+.bp-row{ display:flex; gap:8px; margin-bottom:10px; }
+.bp-field{ flex:1; }
+.bp-field label{ display:block; font-size:10px; font-family:'IBM Plex Mono',monospace; color:var(--ink-soft); margin-bottom:4px; }
+.bp-field input{
+  width:100%; padding:7px 8px; border-radius:6px; border:1px solid var(--grid-line);
+  font-family:'Inter',sans-serif; font-size:13px; background:#fff; color:var(--ink); outline:none;
+}
+.bp-field input:focus{ border-color:var(--ink-blue); }
+.bp-actions{ display:flex; justify-content:flex-end; gap:8px; }
 .modal-footer{ display:flex; justify-content:flex-end; gap:10px; margin-top:22px; }
 select{
   width:100%; padding:11px 12px; border-radius:8px; border:1.5px solid var(--grid-line);
@@ -542,6 +567,161 @@ function escapeHtml(s){
   return (s || "").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
 }
 
+/* ---------------- Math symbol toolbar ---------------- */
+function symbolToolbarHtml(targetId){
+  return `
+    <div class="symbol-toolbar" data-target="${targetId}">
+      <button type="button" class="symbol-btn" data-action="sqrt" title="Racine carrée">√</button>
+      <button type="button" class="symbol-btn" data-action="pow" title="Exposant">xⁿ</button>
+      <button type="button" class="symbol-btn" data-action="sub" title="Indice">xₙ</button>
+      <button type="button" class="symbol-btn" data-action="frac" title="Fraction">a/b</button>
+      <button type="button" class="symbol-btn" data-action="sum" title="Somme avec bornes">∑</button>
+      <button type="button" class="symbol-btn" data-action="int" title="Intégrale avec bornes">∫</button>
+      <button type="button" class="symbol-btn wide" data-action="lim" title="Limite">lim</button>
+      <button type="button" class="symbol-btn" data-action="pi" title="Pi">π</button>
+      <button type="button" class="symbol-btn" data-action="infty" title="Infini">∞</button>
+      <button type="button" class="symbol-btn" data-action="leq" title="Inférieur ou égal">≤</button>
+      <button type="button" class="symbol-btn" data-action="geq" title="Supérieur ou égal">≥</button>
+      <button type="button" class="symbol-btn" data-action="neq" title="Différent">≠</button>
+      <button type="button" class="symbol-btn" data-action="pm" title="Plus ou moins">±</button>
+      <button type="button" class="symbol-btn" data-action="times" title="Multiplié">×</button>
+      <button type="button" class="symbol-btn" data-action="to" title="Flèche">→</button>
+      <button type="button" class="symbol-btn" data-action="alpha" title="Alpha">α</button>
+      <button type="button" class="symbol-btn" data-action="beta" title="Bêta">β</button>
+      <button type="button" class="symbol-btn" data-action="delta" title="Delta">Δ</button>
+      <button type="button" class="symbol-btn" data-action="theta" title="Thêta">θ</button>
+    </div>
+  `;
+}
+
+// Inserts `$` + before + content + after + `$` at the cursor, and selects `content`
+// so the user can immediately type over the placeholder.
+function insertMathWithSelection(textareaId, before, content, after){
+  const ta = document.getElementById(textareaId);
+  if(!ta) return;
+  const start = ta.selectionStart, end = ta.selectionEnd;
+  const mathText = before + content + after;
+  const full = "$" + mathText + "$";
+  ta.value = ta.value.slice(0, start) + full + ta.value.slice(end);
+  const selStart = start + 1 + before.length;
+  const selEnd = selStart + content.length;
+  ta.focus();
+  ta.setSelectionRange(selStart, selEnd);
+  ta.dispatchEvent(new Event('input', { bubbles: true }));
+}
+
+// Wraps the current selection (or a default placeholder) in a LaTeX template.
+function wrapSelection(textareaId, before, after, placeholder){
+  const ta = document.getElementById(textareaId);
+  if(!ta) return;
+  const selected = ta.value.slice(ta.selectionStart, ta.selectionEnd);
+  const content = selected || placeholder;
+  insertMathWithSelection(textareaId, before, content, after);
+}
+
+// Inserts a standalone math symbol, cursor placed right after the closing $.
+function insertSimple(textareaId, latex){
+  const ta = document.getElementById(textareaId);
+  if(!ta) return;
+  const start = ta.selectionStart, end = ta.selectionEnd;
+  const full = "$" + latex + "$ ";
+  ta.value = ta.value.slice(0, start) + full + ta.value.slice(end);
+  const pos = start + full.length;
+  ta.focus();
+  ta.setSelectionRange(pos, pos);
+  ta.dispatchEvent(new Event('input', { bubbles: true }));
+}
+
+// Opens a small inline popover under the toolbar to collect bounds for ∫ or ∑.
+function openBoundsPopover(btn, textareaId, type){
+  document.querySelectorAll('.bounds-popover').forEach(p => p.remove());
+  const toolbar = btn.closest('.symbol-toolbar');
+  if(!toolbar) return;
+
+  const pop = document.createElement('div');
+  pop.className = 'bounds-popover';
+
+  if(type === 'int'){
+    pop.innerHTML = `
+      <div class="bp-row">
+        <div class="bp-field"><label>Borne inf.</label><input type="text" class="bp-lower" value="0" /></div>
+        <div class="bp-field"><label>Borne sup.</label><input type="text" class="bp-upper" value="1" /></div>
+        <div class="bp-field"><label>Variable</label><input type="text" class="bp-var" value="x" /></div>
+      </div>
+      <div class="bp-actions">
+        <button type="button" class="btn-ghost bp-cancel">Annuler</button>
+        <button type="button" class="btn btn-primary btn-sm bp-insert">Insérer</button>
+      </div>
+    `;
+  } else {
+    pop.innerHTML = `
+      <div class="bp-row">
+        <div class="bp-field"><label>Indice</label><input type="text" class="bp-var" value="n" /></div>
+        <div class="bp-field"><label>Val. initiale</label><input type="text" class="bp-lower" value="0" /></div>
+        <div class="bp-field"><label>Val. finale</label><input type="text" class="bp-upper" value="N" /></div>
+      </div>
+      <div class="bp-actions">
+        <button type="button" class="btn-ghost bp-cancel">Annuler</button>
+        <button type="button" class="btn btn-primary btn-sm bp-insert">Insérer</button>
+      </div>
+    `;
+  }
+
+  toolbar.insertAdjacentElement('afterend', pop);
+  pop.querySelector('.bp-lower').focus();
+
+  pop.querySelector('.bp-cancel').addEventListener('click', () => pop.remove());
+  pop.querySelector('.bp-insert').addEventListener('click', () => {
+    const lower = pop.querySelector('.bp-lower').value.trim() || '0';
+    const upper = pop.querySelector('.bp-upper').value.trim() || (type === 'int' ? '1' : 'N');
+    const vr = pop.querySelector('.bp-var').value.trim() || (type === 'int' ? 'x' : 'n');
+
+    if(type === 'int'){
+      const content = `f(${vr})`;
+      insertMathWithSelection(textareaId, `\\int_{${lower}}^{${upper}} `, content, `\\,d${vr}`);
+    } else {
+      const content = `u_{${vr}}`;
+      insertMathWithSelection(textareaId, `\\sum_{${vr}=${lower}}^{${upper}} `, content, ``);
+    }
+    pop.remove();
+  });
+}
+
+function handleSymbolAction(action, targetId, btn){
+  switch(action){
+    case 'sqrt':  wrapSelection(targetId, "\\sqrt{", "}", "x"); break;
+    case 'pow':   wrapSelection(targetId, "^{", "}", "n"); break;
+    case 'sub':   wrapSelection(targetId, "_{", "}", "n"); break;
+    case 'frac':  wrapSelection(targetId, "\\frac{", "}{b}", "a"); break;
+    case 'sum':   openBoundsPopover(btn, targetId, 'sum'); break;
+    case 'int':   openBoundsPopover(btn, targetId, 'int'); break;
+    case 'lim':   insertMathWithSelection(targetId, "\\lim_{x \\to ", "a", "}"); break;
+    case 'pi':    insertSimple(targetId, "\\pi"); break;
+    case 'infty': insertSimple(targetId, "\\infty"); break;
+    case 'leq':   insertSimple(targetId, "\\leq"); break;
+    case 'geq':   insertSimple(targetId, "\\geq"); break;
+    case 'neq':   insertSimple(targetId, "\\neq"); break;
+    case 'pm':    insertSimple(targetId, "\\pm"); break;
+    case 'times': insertSimple(targetId, "\\times"); break;
+    case 'to':    insertSimple(targetId, "\\to"); break;
+    case 'alpha': insertSimple(targetId, "\\alpha"); break;
+    case 'beta':  insertSimple(targetId, "\\beta"); break;
+    case 'delta': insertSimple(targetId, "\\Delta"); break;
+    case 'theta': insertSimple(targetId, "\\theta"); break;
+  }
+}
+
+function attachSymbolToolbars(){
+  el.querySelectorAll('.symbol-toolbar').forEach(toolbar => {
+    const targetId = toolbar.getAttribute('data-target');
+    toolbar.querySelectorAll('.symbol-btn').forEach(btn => {
+      btn.addEventListener('click', () => {
+        handleSymbolAction(btn.getAttribute('data-action'), targetId, btn);
+      });
+    });
+  });
+}
+
 function render(){
   if(state.view === "loading"){
     el.innerHTML = `<div style="display:flex;align-items:center;justify-content:center;min-height:80vh;font-family:'IBM Plex Mono',monospace;color:var(--ink-soft);">Chargement…</div>`;
@@ -571,6 +751,7 @@ function render(){
 
   document.getElementById('logout-btn')?.addEventListener('click', handleLogout);
   attachViewHandlers();
+  attachSymbolToolbars();
   renderLatex(el);
 }
 
@@ -726,12 +907,14 @@ function renderCardModal(){
         <form id="card-form">
           <div class="field">
             <label>Recto</label>
+            ${symbolToolbarHtml('card-front')}
             <textarea id="card-front" placeholder="Question, notion, ou formule. Utilise $...$ pour du LaTeX inline.">${escapeHtml(c?.front || "")}</textarea>
             <div class="preview-box" id="front-preview"></div>
-            <div class="hint">$x^2$ pour inline, $$\\int_a^b f(x)dx$$ pour un bloc</div>
+            <div class="hint">Les boutons insèrent le LaTeX automatiquement — ou écris $x^2$ / $$\\int_a^b f(x)dx$$ à la main</div>
           </div>
           <div class="field">
             <label>Verso</label>
+            ${symbolToolbarHtml('card-back')}
             <textarea id="card-back" placeholder="Réponse.">${escapeHtml(c?.back || "")}</textarea>
             <div class="preview-box" id="back-preview"></div>
           </div>
