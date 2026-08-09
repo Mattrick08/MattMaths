@@ -378,7 +378,6 @@ select{
 .hour-label{ position:absolute; font-family:'IBM Plex Mono',monospace; font-size:9.5px; color:var(--ink-soft); transform:translateY(-6px); right:6px; }
 .day-body{
   position:relative;
-  background-image: repeating-linear-gradient(to bottom, var(--grid-line) 0, var(--grid-line) 1px, transparent 1px, transparent 46px);
   border-left:1px solid var(--grid-line);
 }
 .sched-block{
@@ -1247,7 +1246,7 @@ function renderWeekGrid(){
     return `
       <div class="day-col">
         <div class="day-header">${label}</div>
-        <div class="day-body" style="height:${totalHeight}px;">${blockEls}</div>
+        <div class="day-body" style="height:${totalHeight}px; background-image: repeating-linear-gradient(to bottom, var(--grid-line) 0, var(--grid-line) 1px, transparent 1px, transparent ${HOUR_HEIGHT}px);">${blockEls}</div>
       </div>
     `;
   }).join("");
