@@ -342,6 +342,17 @@ select{
 .section-tab.active{ background:var(--ink); color:#fff; }
 .section-tab:not(.active):hover{ background:var(--grid-line); }
 
+/* ---------- Recurring/one-time toggle ---------- */
+.toggle-group{ display:flex; gap:6px; }
+.toggle-btn{
+  flex:1; font-family:'IBM Plex Mono',monospace; font-size:11.5px; padding:9px 8px; border-radius:8px;
+  border:1.5px solid var(--grid-line); background:#fff; color:var(--ink-soft); cursor:pointer;
+  transition: all .15s ease; text-align:center;
+}
+.toggle-btn.active{ border-color:var(--ink-blue); background:var(--ink-blue); color:#fff; }
+.sched-block.one-time{ background: var(--amber); }
+.sched-block.one-time:hover{ background: var(--ink); }
+
 /* ---------- Weekly schedule grid ---------- */
 .week-grid{
   display:flex; gap:2px; overflow-x:auto; background:var(--paper-raised);
@@ -1139,6 +1150,25 @@ function fmtDateFr(dateStr){
   return d.toLocaleDateString('fr-FR', { weekday: 'short', day: 'numeric', month: 'short' });
 }
 
+function getCurrentWeekRange(){
+  const now = new Date();
+  now.setHours(0,0,0,0);
+  const jsDay = now.getDay(); // 0=Sun..6=Sat
+  const mondayOffset = jsDay === 0 ? -6 : 1 - jsDay;
+  const monday = new Date(now);
+  monday.setDate(now.getDate() + mondayOffset);
+  const saturday = new Date(monday);
+  saturday.setDate(monday.getDate() + 5);
+  return { monday, saturday };
+}
+
+function isDateInCurrentWeek(dateStr){
+  if(!dateStr) return false;
+  const { monday, saturday } = getCurrentWeekRange();
+  const d = new Date(dateStr + 'T00:00:00');
+  return d >= monday && d <= saturday;
+}
+
 function renderPlanning(){
   return `
     <div class="section-head">
@@ -1167,15 +1197,20 @@ function renderWeekGrid(){
   }
 
   const dayColumns = PLANNING_DAYS_SHORT.map((label, dayIdx) => {
-    const blocks = state.scheduleBlocks.filter(b => b.day_of_week === dayIdx);
+    const blocks = state.scheduleBlocks.filter(b => {
+      if(b.day_of_week !== dayIdx) return false;
+      if(b.is_recurring === false) return isDateInCurrentWeek(b.specific_date);
+      return true;
+    });
     const blockEls = blocks.map(b => {
       const startMin = timeToMinutes(b.start_time);
       const endMin = timeToMinutes(b.end_time);
       const top = ((startMin - GRID_START_H * 60) / 60) * HOUR_HEIGHT;
       const height = Math.max(20, ((endMin - startMin) / 60) * HOUR_HEIGHT);
+      const oneTime = b.is_recurring === false;
       return `
-        <div class="sched-block" style="top:${top}px; height:${height}px;" data-edit-block="${b.id}">
-          <div class="sched-block-subject">${escapeHtml(b.subject)}</div>
+        <div class="sched-block ${oneTime ? 'one-time' : ''}" style="top:${top}px; height:${height}px;" data-edit-block="${b.id}">
+          <div class="sched-block-subject">${escapeHtml(b.subject)}${oneTime ? ' • ponctuel' : ''}</div>
           <div class="sched-block-title">${escapeHtml(b.title)}</div>
           <div class="sched-block-time">${fmtTimeShort(b.start_time)}–${fmtTimeShort(b.end_time)}</div>
         </div>
@@ -1243,13 +1278,14 @@ function renderEventsList(){
 
 function renderBlockModal(){
   const b = state.editingBlock;
+  const isRecurring = b ? b.is_recurring !== false : true;
   const dayOptions = PLANNING_DAYS.map((d,i) => `<option value="${i}" ${b && b.day_of_week === i ? 'selected' : ''}>${d}</option>`).join("");
   const subjOptions = SUBJECTS.map(s => `<option value="${s}" ${b && b.subject === s ? 'selected' : ''}>${s}</option>`).join("");
   return `
     <div class="modal-backdrop" id="block-modal-backdrop">
       <div class="modal">
         <h3>${b ? "Modifier le cours" : "Nouveau cours"}</h3>
-        <form id="block-form">
+        <form id="block-form" data-recurring="${isRecurring}">
           <div class="field">
             <label>Intitulé</label>
             <input id="block-title" type="text" required value="${escapeHtml(b?.title || '')}" placeholder="Ex : Colle de maths, TD physique..."
@@ -1260,8 +1296,19 @@ function renderBlockModal(){
             <select id="block-subject">${subjOptions}</select>
           </div>
           <div class="field">
+            <label>Répétition</label>
+            <div class="toggle-group">
+              <button type="button" class="toggle-btn ${isRecurring ? 'active' : ''}" data-recur-choice="true">Chaque semaine</button>
+              <button type="button" class="toggle-btn ${!isRecurring ? 'active' : ''}" data-recur-choice="false">Cette semaine seulement</button>
+            </div>
+          </div>
+          <div class="field ${isRecurring ? '' : 'hidden'}" id="block-day-field">
             <label>Jour</label>
             <select id="block-day">${dayOptions}</select>
+          </div>
+          <div class="field ${isRecurring ? 'hidden' : ''}" id="block-date-field">
+            <label>Date</label>
+            <input type="date" id="block-date" value="${!isRecurring && b?.specific_date ? b.specific_date : ''}" />
           </div>
           <div class="bp-row">
             <div class="bp-field"><label>Début</label><input type="time" id="block-start" value="${b?.start_time ? b.start_time.slice(0,5) : '08:00'}" /></div>
@@ -1421,21 +1468,45 @@ function attachViewHandlers(){
   document.getElementById('block-cancel')?.addEventListener('click', () => {
     state.showBlockModal = false; state.editingBlock = null; render();
   });
+  el.querySelectorAll('[data-recur-choice]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const form = document.getElementById('block-form');
+      const isRecurring = btn.getAttribute('data-recur-choice') === 'true';
+      form.dataset.recurring = isRecurring;
+      form.querySelectorAll('[data-recur-choice]').forEach(b2 => b2.classList.toggle('active', b2 === btn));
+      document.getElementById('block-day-field').classList.toggle('hidden', !isRecurring);
+      document.getElementById('block-date-field').classList.toggle('hidden', isRecurring);
+    });
+  });
   document.getElementById('block-delete')?.addEventListener('click', async () => {
     await deleteBlock(state.editingBlock.id);
     state.showBlockModal = false; state.editingBlock = null; render();
   });
   document.getElementById('block-form')?.addEventListener('submit', (e) => {
     e.preventDefault();
-    const block = {
-      title: document.getElementById('block-title').value.trim(),
-      subject: document.getElementById('block-subject').value,
-      day_of_week: parseInt(document.getElementById('block-day').value, 10),
-      start_time: document.getElementById('block-start').value,
-      end_time: document.getElementById('block-end').value,
-      room: document.getElementById('block-room').value.trim(),
-    };
-    if(block.title && block.start_time && block.end_time) saveBlock(block);
+    const form = e.target;
+    const isRecurring = form.dataset.recurring !== 'false';
+    const title = document.getElementById('block-title').value.trim();
+    const subject = document.getElementById('block-subject').value;
+    const start_time = document.getElementById('block-start').value;
+    const end_time = document.getElementById('block-end').value;
+    const room = document.getElementById('block-room').value.trim();
+    if(!title || !start_time || !end_time) return;
+
+    let block;
+    if(isRecurring){
+      const day_of_week = parseInt(document.getElementById('block-day').value, 10);
+      block = { title, subject, start_time, end_time, room, is_recurring: true, day_of_week, specific_date: null };
+    } else {
+      const dateVal = document.getElementById('block-date').value;
+      if(!dateVal){ toast("Choisis une date"); return; }
+      const d = new Date(dateVal + 'T00:00:00');
+      const jsDay = d.getDay(); // 0=Sun..6=Sat
+      if(jsDay === 0){ toast("Le dimanche n'est pas affiché dans le planning — choisis lundi à samedi"); return; }
+      const day_of_week = jsDay - 1; // Lundi=1->0 ... Samedi=6->5
+      block = { title, subject, start_time, end_time, room, is_recurring: false, day_of_week, specific_date: dateVal };
+    }
+    saveBlock(block);
   });
 
   // Planning: events / deadlines
