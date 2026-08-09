@@ -331,6 +331,70 @@ select{
 }
 
 .hidden{ display:none !important; }
+
+/* ---------- Section tabs ---------- */
+.section-tabs{ display:flex; gap:6px; margin-bottom:28px; }
+.section-tab{
+  font-family:'IBM Plex Mono',monospace; font-size:12px; text-transform:uppercase; letter-spacing:.05em;
+  padding:8px 16px; border-radius:20px; border:1.5px solid var(--ink); background:transparent; color:var(--ink);
+  cursor:pointer; transition: all .15s ease;
+}
+.section-tab.active{ background:var(--ink); color:#fff; }
+.section-tab:not(.active):hover{ background:var(--grid-line); }
+
+/* ---------- Weekly schedule grid ---------- */
+.week-grid{
+  display:flex; gap:2px; overflow-x:auto; background:var(--paper-raised);
+  border:1px solid var(--grid-line); border-radius:10px; padding:14px;
+}
+.time-col{ width:38px; flex-shrink:0; }
+.day-col{ flex:1; min-width:108px; position:relative; }
+.day-header{
+  font-family:'IBM Plex Mono',monospace; font-size:11px; text-align:center; color:var(--ink-soft);
+  padding-bottom:8px; text-transform:uppercase; letter-spacing:.05em;
+  border-bottom:1.5px solid var(--ink); margin-bottom:4px;
+}
+.time-labels{ position:relative; }
+.hour-label{ position:absolute; font-family:'IBM Plex Mono',monospace; font-size:9.5px; color:var(--ink-soft); transform:translateY(-6px); right:6px; }
+.day-body{
+  position:relative;
+  background-image: repeating-linear-gradient(to bottom, var(--grid-line) 0, var(--grid-line) 1px, transparent 1px, transparent 46px);
+  border-left:1px solid var(--grid-line);
+}
+.sched-block{
+  position:absolute; left:2px; right:2px; border-radius:6px; padding:4px 6px;
+  background: var(--ink-blue); color:#fff; font-size:10.5px; overflow:hidden; cursor:pointer;
+  box-shadow: 2px 2px 0 rgba(35,43,61,0.15);
+}
+.sched-block:hover{ background: var(--ink); }
+.sched-block-subject{ font-family:'IBM Plex Mono',monospace; font-size:8.5px; opacity:.85; text-transform:uppercase; letter-spacing:.03em; }
+.sched-block-title{ font-weight:600; font-size:11px; line-height:1.25; margin:1px 0; }
+.sched-block-time{ font-family:'IBM Plex Mono',monospace; font-size:9px; opacity:.85; }
+
+/* ---------- Events / deadlines list ---------- */
+.event-row{
+  background:var(--paper-raised); border:1px solid var(--grid-line); border-radius:10px;
+  padding:12px 16px; display:flex; align-items:center; gap:12px; margin-bottom:9px; flex-wrap:wrap;
+}
+.event-type-tag{
+  font-family:'IBM Plex Mono',monospace; font-size:10px; text-transform:uppercase;
+  padding:3px 8px; border-radius:5px; background:var(--amber-dim); color:var(--amber); white-space:nowrap;
+}
+.event-main{ flex:1; min-width:140px; }
+.event-title{ font-weight:600; font-size:14px; }
+.event-meta{ font-family:'IBM Plex Mono',monospace; font-size:11px; color:var(--ink-soft); margin-top:2px; }
+.event-days{
+  font-family:'IBM Plex Mono',monospace; font-size:11.5px; font-weight:600; white-space:nowrap;
+  padding:4px 10px; border-radius:12px; background:var(--grid-line); color:var(--ink-soft);
+}
+.event-row.urgency-urgent .event-days{ background:var(--pen-red-dim); color:var(--pen-red); }
+.event-row.urgency-soon .event-days{ background:var(--amber-dim); color:var(--amber); }
+.event-row.urgency-past{ opacity:.5; }
+
+@media (max-width: 600px){
+  .week-grid{ padding:10px; }
+  .day-col{ min-width:92px; }
+}
 </style>
 </head>
 <body>
@@ -341,8 +405,8 @@ select{
 /* ============================================================
    CONFIG — replace with your own Supabase project credentials
    ============================================================ */
-const SUPABASE_URL = "https://uhnfzvhjfgxhdpsfnxws.supabase.co";
-const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InVobmZ6dmhqZmd4aGRwc2ZueHdzIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODYxODA1MDQsImV4cCI6MjEwMTc1NjUwNH0.fb8-rb48yAXfsBbCrEzzXh_Rkp9JCSXKVwEv8q2B1PM";
+const SUPABASE_URL = "YOUR_SUPABASE_URL";
+const SUPABASE_ANON_KEY = "YOUR_SUPABASE_ANON_KEY";
 
 const sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
@@ -350,6 +414,7 @@ const SUBJECTS = ["Maths","Physique","Chimie","SI","Info","Français","Philo","A
 
 let state = {
   user: null,
+  section: "fiches", // fiches | planning
   view: "loading", // loading | auth | dashboard | deck | review
   authMode: "login", // login | signup
   decks: [],
@@ -361,6 +426,12 @@ let state = {
   editingCard: null,   // card object or null (new)
   showCardModal: false,
   showDeckModal: false,
+  scheduleBlocks: [],
+  events: [],
+  editingBlock: null,
+  showBlockModal: false,
+  editingEvent: null,
+  showEventModal: false,
 };
 
 const el = document.getElementById("app");
@@ -428,6 +499,73 @@ async function loadCards(deckId){
   if(error){ console.error(error); toast("Erreur de chargement des fiches"); return; }
   state.cards = data || [];
   render();
+}
+
+/* ---------------- Planning: data loading ---------------- */
+async function loadScheduleBlocks(){
+  const { data, error } = await sb
+    .from('schedule_blocks')
+    .select('*')
+    .order('day_of_week', { ascending: true })
+    .order('start_time', { ascending: true });
+  if(error){ console.error(error); toast("Erreur de chargement de l'emploi du temps"); return; }
+  state.scheduleBlocks = data || [];
+  render();
+}
+
+async function loadEvents(){
+  const { data, error } = await sb
+    .from('events')
+    .select('*')
+    .order('event_date', { ascending: true })
+    .order('event_time', { ascending: true });
+  if(error){ console.error(error); toast("Erreur de chargement des échéances"); return; }
+  state.events = data || [];
+  render();
+}
+
+/* ---------------- Planning: schedule block CRUD ---------------- */
+async function saveBlock(block){
+  const { data: { user } } = await sb.auth.getUser();
+  if(state.editingBlock){
+    const { error } = await sb.from('schedule_blocks').update(block).eq('id', state.editingBlock.id);
+    if(error){ toast("Erreur : " + error.message); return; }
+  } else {
+    const { error } = await sb.from('schedule_blocks').insert({ ...block, user_id: user.id });
+    if(error){ toast("Erreur : " + error.message); return; }
+  }
+  state.showBlockModal = false;
+  state.editingBlock = null;
+  await loadScheduleBlocks();
+}
+
+async function deleteBlock(blockId){
+  if(!confirm("Supprimer ce cours de l'emploi du temps ?")) return;
+  const { error } = await sb.from('schedule_blocks').delete().eq('id', blockId);
+  if(error){ toast("Erreur : " + error.message); return; }
+  await loadScheduleBlocks();
+}
+
+/* ---------------- Planning: event (deadline) CRUD ---------------- */
+async function saveEvent(evt){
+  const { data: { user } } = await sb.auth.getUser();
+  if(state.editingEvent){
+    const { error } = await sb.from('events').update(evt).eq('id', state.editingEvent.id);
+    if(error){ toast("Erreur : " + error.message); return; }
+  } else {
+    const { error } = await sb.from('events').insert({ ...evt, user_id: user.id });
+    if(error){ toast("Erreur : " + error.message); return; }
+  }
+  state.showEventModal = false;
+  state.editingEvent = null;
+  await loadEvents();
+}
+
+async function deleteEvent(eventId){
+  if(!confirm("Supprimer cette échéance ?")) return;
+  const { error } = await sb.from('events').delete().eq('id', eventId);
+  if(error){ toast("Erreur : " + error.message); return; }
+  await loadEvents();
 }
 
 /* ---------------- Auth ---------------- */
@@ -731,9 +869,13 @@ function render(){
 
   // authenticated shell
   let body = "";
-  if(state.view === "dashboard") body = renderDashboard();
-  else if(state.view === "deck") body = renderDeck();
-  else if(state.view === "review") body = renderReview();
+  if(state.section === "planning"){
+    body = renderPlanning();
+  } else {
+    if(state.view === "dashboard") body = renderDashboard();
+    else if(state.view === "deck") body = renderDeck();
+    else if(state.view === "review") body = renderReview();
+  }
 
   el.innerHTML = `
     <div class="topbar">
@@ -746,10 +888,16 @@ function render(){
         <button class="btn-ghost" id="logout-btn">Déconnexion</button>
       </div>
     </div>
+    <div class="section-tabs">
+      <button class="section-tab ${state.section === 'fiches' ? 'active' : ''}" id="tab-fiches">Fiches</button>
+      <button class="section-tab ${state.section === 'planning' ? 'active' : ''}" id="tab-planning">Planning</button>
+    </div>
     ${body}
   `;
 
   document.getElementById('logout-btn')?.addEventListener('click', handleLogout);
+  document.getElementById('tab-fiches')?.addEventListener('click', () => { state.section = 'fiches'; render(); });
+  document.getElementById('tab-planning')?.addEventListener('click', () => { state.section = 'planning'; render(); });
   attachViewHandlers();
   attachSymbolToolbars();
   renderLatex(el);
@@ -970,6 +1118,208 @@ function renderReview(){
   `;
 }
 
+/* ---------------- Planning: rendering ---------------- */
+const PLANNING_DAYS = ["Lundi","Mardi","Mercredi","Jeudi","Vendredi","Samedi"];
+const PLANNING_DAYS_SHORT = ["Lun","Mar","Mer","Jeu","Ven","Sam"];
+const EVENT_TYPES = ["DS","Devoir","Colle","Deadline","Autre"];
+const GRID_START_H = 8;
+const GRID_END_H = 19;
+const HOUR_HEIGHT = 46;
+
+function timeToMinutes(t){
+  if(!t) return 0;
+  const parts = t.split(':');
+  return parseInt(parts[0],10) * 60 + parseInt(parts[1],10);
+}
+function fmtTimeShort(t){
+  return t ? t.slice(0,5) : '';
+}
+function fmtDateFr(dateStr){
+  const d = new Date(dateStr + 'T00:00:00');
+  return d.toLocaleDateString('fr-FR', { weekday: 'short', day: 'numeric', month: 'short' });
+}
+
+function renderPlanning(){
+  return `
+    <div class="section-head">
+      <h2 class="display" style="font-size:20px;">Emploi du temps</h2>
+      <button class="btn btn-outline btn-sm" id="add-block-btn">+ Ajouter un cours</button>
+    </div>
+    ${renderWeekGrid()}
+
+    <div class="section-head" style="margin-top:36px;">
+      <h2 class="display" style="font-size:20px;">Échéances à venir</h2>
+      <button class="btn btn-outline btn-sm" id="add-event-btn">+ Ajouter une échéance</button>
+    </div>
+    ${renderEventsList()}
+
+    ${state.showBlockModal ? renderBlockModal() : ""}
+    ${state.showEventModal ? renderEventModal() : ""}
+  `;
+}
+
+function renderWeekGrid(){
+  const totalHeight = (GRID_END_H - GRID_START_H) * HOUR_HEIGHT;
+
+  let hourLabels = "";
+  for(let h = GRID_START_H; h <= GRID_END_H; h++){
+    hourLabels += `<div class="hour-label" style="top:${(h - GRID_START_H) * HOUR_HEIGHT}px">${h}h</div>`;
+  }
+
+  const dayColumns = PLANNING_DAYS_SHORT.map((label, dayIdx) => {
+    const blocks = state.scheduleBlocks.filter(b => b.day_of_week === dayIdx);
+    const blockEls = blocks.map(b => {
+      const startMin = timeToMinutes(b.start_time);
+      const endMin = timeToMinutes(b.end_time);
+      const top = ((startMin - GRID_START_H * 60) / 60) * HOUR_HEIGHT;
+      const height = Math.max(20, ((endMin - startMin) / 60) * HOUR_HEIGHT);
+      return `
+        <div class="sched-block" style="top:${top}px; height:${height}px;" data-edit-block="${b.id}">
+          <div class="sched-block-subject">${escapeHtml(b.subject)}</div>
+          <div class="sched-block-title">${escapeHtml(b.title)}</div>
+          <div class="sched-block-time">${fmtTimeShort(b.start_time)}–${fmtTimeShort(b.end_time)}</div>
+        </div>
+      `;
+    }).join("");
+    return `
+      <div class="day-col">
+        <div class="day-header">${label}</div>
+        <div class="day-body" style="height:${totalHeight}px;">${blockEls}</div>
+      </div>
+    `;
+  }).join("");
+
+  return `
+    <div class="week-grid">
+      <div class="time-col">
+        <div class="day-header"></div>
+        <div class="time-labels" style="height:${totalHeight}px;">${hourLabels}</div>
+      </div>
+      ${dayColumns}
+    </div>
+  `;
+}
+
+function renderEventsList(){
+  if(state.events.length === 0){
+    return `
+      <div class="empty-state">
+        <div class="display">Aucune échéance</div>
+        <p>Ajoute un DS, un devoir ou une colle à venir.</p>
+      </div>
+    `;
+  }
+
+  const today = new Date();
+  today.setHours(0,0,0,0);
+  const sorted = [...state.events].sort((a,b) => a.event_date.localeCompare(b.event_date));
+
+  const rows = sorted.map(e => {
+    const evDate = new Date(e.event_date + 'T00:00:00');
+    const diffDays = Math.round((evDate - today) / 86400000);
+    let urgency = 'later';
+    if(diffDays < 0) urgency = 'past';
+    else if(diffDays <= 2) urgency = 'urgent';
+    else if(diffDays <= 7) urgency = 'soon';
+    const daysLabel = diffDays === 0 ? "aujourd'hui" : diffDays === 1 ? "demain" : diffDays < 0 ? `il y a ${Math.abs(diffDays)}j` : `dans ${diffDays}j`;
+    return `
+      <div class="event-row urgency-${urgency}">
+        <div class="event-type-tag">${escapeHtml(e.event_type)}</div>
+        <div class="event-main">
+          <div class="event-title">${escapeHtml(e.title)}</div>
+          <div class="event-meta">${escapeHtml(e.subject)} · ${fmtDateFr(e.event_date)}${e.event_time ? ' · ' + fmtTimeShort(e.event_time) : ''}</div>
+        </div>
+        <div class="event-days">${daysLabel}</div>
+        <div class="card-row-actions">
+          <button class="icon-btn" data-edit-event="${e.id}" title="Modifier">✎</button>
+          <button class="icon-btn" data-delete-event="${e.id}" title="Supprimer">✕</button>
+        </div>
+      </div>
+    `;
+  }).join("");
+
+  return `<div class="card-list">${rows}</div>`;
+}
+
+function renderBlockModal(){
+  const b = state.editingBlock;
+  const dayOptions = PLANNING_DAYS.map((d,i) => `<option value="${i}" ${b && b.day_of_week === i ? 'selected' : ''}>${d}</option>`).join("");
+  const subjOptions = SUBJECTS.map(s => `<option value="${s}" ${b && b.subject === s ? 'selected' : ''}>${s}</option>`).join("");
+  return `
+    <div class="modal-backdrop" id="block-modal-backdrop">
+      <div class="modal">
+        <h3>${b ? "Modifier le cours" : "Nouveau cours"}</h3>
+        <form id="block-form">
+          <div class="field">
+            <label>Intitulé</label>
+            <input id="block-title" type="text" required value="${escapeHtml(b?.title || '')}" placeholder="Ex : Colle de maths, TD physique..."
+              style="width:100%;padding:11px 12px;border-radius:8px;border:1.5px solid var(--grid-line);font-family:'Inter',sans-serif;font-size:14px;" />
+          </div>
+          <div class="field">
+            <label>Matière</label>
+            <select id="block-subject">${subjOptions}</select>
+          </div>
+          <div class="field">
+            <label>Jour</label>
+            <select id="block-day">${dayOptions}</select>
+          </div>
+          <div class="bp-row">
+            <div class="bp-field"><label>Début</label><input type="time" id="block-start" value="${b?.start_time ? b.start_time.slice(0,5) : '08:00'}" /></div>
+            <div class="bp-field"><label>Fin</label><input type="time" id="block-end" value="${b?.end_time ? b.end_time.slice(0,5) : '09:00'}" /></div>
+          </div>
+          <div class="field">
+            <label>Salle (optionnel)</label>
+            <input id="block-room" type="text" value="${escapeHtml(b?.room || '')}"
+              style="width:100%;padding:11px 12px;border-radius:8px;border:1.5px solid var(--grid-line);font-family:'Inter',sans-serif;font-size:14px;" />
+          </div>
+          <div class="modal-footer">
+            ${b ? `<button type="button" class="btn-danger-text" id="block-delete" style="margin-right:auto;">Supprimer</button>` : ""}
+            <button type="button" class="btn btn-outline btn-sm" id="block-cancel">Annuler</button>
+            <button type="submit" class="btn btn-primary btn-sm">Enregistrer</button>
+          </div>
+        </form>
+      </div>
+    </div>
+  `;
+}
+
+function renderEventModal(){
+  const e = state.editingEvent;
+  const typeOptions = EVENT_TYPES.map(t => `<option value="${t}" ${e && e.event_type === t ? 'selected' : ''}>${t}</option>`).join("");
+  const subjOptions = SUBJECTS.map(s => `<option value="${s}" ${e && e.subject === s ? 'selected' : ''}>${s}</option>`).join("");
+  return `
+    <div class="modal-backdrop" id="event-modal-backdrop">
+      <div class="modal">
+        <h3>${e ? "Modifier l'échéance" : "Nouvelle échéance"}</h3>
+        <form id="event-form">
+          <div class="field">
+            <label>Titre</label>
+            <input id="event-title" type="text" required value="${escapeHtml(e?.title || '')}" placeholder="Ex : DS n°4"
+              style="width:100%;padding:11px 12px;border-radius:8px;border:1.5px solid var(--grid-line);font-family:'Inter',sans-serif;font-size:14px;" />
+          </div>
+          <div class="bp-row">
+            <div class="bp-field"><label>Type</label><select id="event-type">${typeOptions}</select></div>
+            <div class="bp-field"><label>Matière</label><select id="event-subject">${subjOptions}</select></div>
+          </div>
+          <div class="bp-row">
+            <div class="bp-field"><label>Date</label><input type="date" id="event-date" required value="${e?.event_date || ''}" /></div>
+            <div class="bp-field"><label>Heure (optionnel)</label><input type="time" id="event-time" value="${e?.event_time ? e.event_time.slice(0,5) : ''}" /></div>
+          </div>
+          <div class="field">
+            <label>Notes (optionnel)</label>
+            <textarea id="event-notes" style="min-height:60px;">${escapeHtml(e?.notes || '')}</textarea>
+          </div>
+          <div class="modal-footer">
+            ${e ? `<button type="button" class="btn-danger-text" id="event-delete" style="margin-right:auto;">Supprimer</button>` : ""}
+            <button type="button" class="btn btn-outline btn-sm" id="event-cancel">Annuler</button>
+            <button type="submit" class="btn btn-primary btn-sm">Enregistrer</button>
+          </div>
+        </form>
+      </div>
+    </div>
+  `;
+}
+
 /* ---------------- Event delegation ---------------- */
 function attachViewHandlers(){
   // Dashboard
@@ -1053,6 +1403,77 @@ function attachViewHandlers(){
     });
   });
   document.getElementById('finish-review-btn')?.addEventListener('click', finishReview);
+
+  // Planning: schedule blocks
+  document.getElementById('add-block-btn')?.addEventListener('click', () => {
+    state.editingBlock = null; state.showBlockModal = true; render();
+  });
+  el.querySelectorAll('[data-edit-block]').forEach(node => {
+    node.addEventListener('click', () => {
+      const id = node.getAttribute('data-edit-block');
+      state.editingBlock = state.scheduleBlocks.find(b => b.id === id);
+      state.showBlockModal = true; render();
+    });
+  });
+  document.getElementById('block-modal-backdrop')?.addEventListener('click', (e) => {
+    if(e.target.id === 'block-modal-backdrop'){ state.showBlockModal = false; state.editingBlock = null; render(); }
+  });
+  document.getElementById('block-cancel')?.addEventListener('click', () => {
+    state.showBlockModal = false; state.editingBlock = null; render();
+  });
+  document.getElementById('block-delete')?.addEventListener('click', async () => {
+    await deleteBlock(state.editingBlock.id);
+    state.showBlockModal = false; state.editingBlock = null; render();
+  });
+  document.getElementById('block-form')?.addEventListener('submit', (e) => {
+    e.preventDefault();
+    const block = {
+      title: document.getElementById('block-title').value.trim(),
+      subject: document.getElementById('block-subject').value,
+      day_of_week: parseInt(document.getElementById('block-day').value, 10),
+      start_time: document.getElementById('block-start').value,
+      end_time: document.getElementById('block-end').value,
+      room: document.getElementById('block-room').value.trim(),
+    };
+    if(block.title && block.start_time && block.end_time) saveBlock(block);
+  });
+
+  // Planning: events / deadlines
+  document.getElementById('add-event-btn')?.addEventListener('click', () => {
+    state.editingEvent = null; state.showEventModal = true; render();
+  });
+  el.querySelectorAll('[data-edit-event]').forEach(node => {
+    node.addEventListener('click', () => {
+      const id = node.getAttribute('data-edit-event');
+      state.editingEvent = state.events.find(ev => ev.id === id);
+      state.showEventModal = true; render();
+    });
+  });
+  el.querySelectorAll('[data-delete-event]').forEach(btn => {
+    btn.addEventListener('click', () => deleteEvent(btn.getAttribute('data-delete-event')));
+  });
+  document.getElementById('event-modal-backdrop')?.addEventListener('click', (e) => {
+    if(e.target.id === 'event-modal-backdrop'){ state.showEventModal = false; state.editingEvent = null; render(); }
+  });
+  document.getElementById('event-cancel')?.addEventListener('click', () => {
+    state.showEventModal = false; state.editingEvent = null; render();
+  });
+  document.getElementById('event-delete')?.addEventListener('click', async () => {
+    await deleteEvent(state.editingEvent.id);
+    state.showEventModal = false; state.editingEvent = null; render();
+  });
+  document.getElementById('event-form')?.addEventListener('submit', (e) => {
+    e.preventDefault();
+    const evt = {
+      title: document.getElementById('event-title').value.trim(),
+      event_type: document.getElementById('event-type').value,
+      subject: document.getElementById('event-subject').value,
+      event_date: document.getElementById('event-date').value,
+      event_time: document.getElementById('event-time').value || null,
+      notes: document.getElementById('event-notes').value.trim(),
+    };
+    if(evt.title && evt.event_date) saveEvent(evt);
+  });
 }
 
 /* ---------------- Boot / auth listener ---------------- */
@@ -1060,7 +1481,7 @@ sb.auth.onAuthStateChange(async (event, session) => {
   if(session?.user){
     state.user = session.user;
     state.view = "dashboard";
-    await loadDecks();
+    await Promise.all([loadDecks(), loadScheduleBlocks(), loadEvents()]);
   } else {
     state.user = null;
     state.view = "auth";
@@ -1073,7 +1494,7 @@ sb.auth.onAuthStateChange(async (event, session) => {
   if(session?.user){
     state.user = session.user;
     state.view = "dashboard";
-    await loadDecks();
+    await Promise.all([loadDecks(), loadScheduleBlocks(), loadEvents()]);
   } else {
     state.view = "auth";
     render();
