@@ -353,6 +353,15 @@ select{
 .sched-block.one-time{ background: var(--amber); }
 .sched-block.one-time:hover{ background: var(--ink); }
 
+.week-nav{
+  display:flex; align-items:center; justify-content:space-between; gap:10px;
+  margin-bottom:12px; flex-wrap:wrap;
+}
+.week-nav-label{
+  display:flex; align-items:center; gap:10px;
+  font-family:'IBM Plex Mono',monospace; font-size:13px; color:var(--ink); font-weight:600;
+}
+
 /* ---------- Weekly schedule grid ---------- */
 .week-grid{
   display:flex; gap:2px; overflow-x:auto; background:var(--paper-raised);
@@ -439,6 +448,7 @@ let state = {
   showDeckModal: false,
   scheduleBlocks: [],
   events: [],
+  weekOffset: 0, // 0 = current week, +1 = next week, -1 = previous week...
   editingBlock: null,
   showBlockModal: false,
   editingEvent: null,
@@ -1150,23 +1160,40 @@ function fmtDateFr(dateStr){
   return d.toLocaleDateString('fr-FR', { weekday: 'short', day: 'numeric', month: 'short' });
 }
 
-function getCurrentWeekRange(){
+function getWeekRange(offset){
   const now = new Date();
   now.setHours(0,0,0,0);
   const jsDay = now.getDay(); // 0=Sun..6=Sat
   const mondayOffset = jsDay === 0 ? -6 : 1 - jsDay;
   const monday = new Date(now);
-  monday.setDate(now.getDate() + mondayOffset);
+  monday.setDate(now.getDate() + mondayOffset + (offset || 0) * 7);
   const saturday = new Date(monday);
   saturday.setDate(monday.getDate() + 5);
   return { monday, saturday };
 }
 
-function isDateInCurrentWeek(dateStr){
+function isDateInWeek(dateStr, offset){
   if(!dateStr) return false;
-  const { monday, saturday } = getCurrentWeekRange();
+  const { monday, saturday } = getWeekRange(offset);
   const d = new Date(dateStr + 'T00:00:00');
   return d >= monday && d <= saturday;
+}
+
+function fmtWeekRangeFr(monday, saturday){
+  const opts = { day: 'numeric', month: 'short' };
+  return `${monday.toLocaleDateString('fr-FR', opts)} – ${saturday.toLocaleDateString('fr-FR', opts)}`;
+}
+
+function toISODate(d){
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
+}
+
+function defaultDateForOneTime(){
+  const { monday } = getWeekRange(state.weekOffset);
+  return toISODate(monday);
 }
 
 function renderPlanning(){
@@ -1190,6 +1217,7 @@ function renderPlanning(){
 
 function renderWeekGrid(){
   const totalHeight = (GRID_END_H - GRID_START_H) * HOUR_HEIGHT;
+  const { monday, saturday } = getWeekRange(state.weekOffset);
 
   let hourLabels = "";
   for(let h = GRID_START_H; h <= GRID_END_H; h++){
@@ -1199,7 +1227,7 @@ function renderWeekGrid(){
   const dayColumns = PLANNING_DAYS_SHORT.map((label, dayIdx) => {
     const blocks = state.scheduleBlocks.filter(b => {
       if(b.day_of_week !== dayIdx) return false;
-      if(b.is_recurring === false) return isDateInCurrentWeek(b.specific_date);
+      if(b.is_recurring === false) return isDateInWeek(b.specific_date, state.weekOffset);
       return true;
     });
     const blockEls = blocks.map(b => {
@@ -1225,6 +1253,14 @@ function renderWeekGrid(){
   }).join("");
 
   return `
+    <div class="week-nav">
+      <button type="button" class="btn-ghost" id="week-prev">← Précédente</button>
+      <div class="week-nav-label">
+        ${fmtWeekRangeFr(monday, saturday)}
+        ${state.weekOffset !== 0 ? `<button type="button" class="btn-ghost" id="week-today">Aujourd'hui</button>` : ""}
+      </div>
+      <button type="button" class="btn-ghost" id="week-next">Suivante →</button>
+    </div>
     <div class="week-grid">
       <div class="time-col">
         <div class="day-header"></div>
@@ -1308,7 +1344,7 @@ function renderBlockModal(){
           </div>
           <div class="field ${isRecurring ? 'hidden' : ''}" id="block-date-field">
             <label>Date</label>
-            <input type="date" id="block-date" value="${!isRecurring && b?.specific_date ? b.specific_date : ''}" />
+            <input type="date" id="block-date" value="${!isRecurring && b?.specific_date ? b.specific_date : (!b ? defaultDateForOneTime() : '')}" />
           </div>
           <div class="bp-row">
             <div class="bp-field"><label>Début</label><input type="time" id="block-start" value="${b?.start_time ? b.start_time.slice(0,5) : '08:00'}" /></div>
@@ -1450,6 +1486,17 @@ function attachViewHandlers(){
     });
   });
   document.getElementById('finish-review-btn')?.addEventListener('click', finishReview);
+
+  // Planning: week navigation
+  document.getElementById('week-prev')?.addEventListener('click', () => {
+    state.weekOffset -= 1; render();
+  });
+  document.getElementById('week-next')?.addEventListener('click', () => {
+    state.weekOffset += 1; render();
+  });
+  document.getElementById('week-today')?.addEventListener('click', () => {
+    state.weekOffset = 0; render();
+  });
 
   // Planning: schedule blocks
   document.getElementById('add-block-btn')?.addEventListener('click', () => {
