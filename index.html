@@ -362,6 +362,36 @@ select{
   font-family:'IBM Plex Mono',monospace; font-size:13px; color:var(--ink); font-weight:600;
 }
 
+/* ---------- Colles tracker ---------- */
+.subject-bars{ display:flex; flex-direction:column; gap:10px; background:var(--paper-raised); border:1px solid var(--grid-line); border-radius:10px; padding:16px 18px; }
+.subject-bar-row{ display:flex; align-items:center; gap:12px; }
+.subject-bar-label{ width:90px; font-family:'IBM Plex Mono',monospace; font-size:12px; color:var(--ink); flex-shrink:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.subject-bar-track{ flex:1; height:10px; background:var(--grid-line); border-radius:5px; overflow:hidden; }
+.subject-bar-fill{ height:100%; border-radius:5px; }
+.subject-bar-value{ font-family:'IBM Plex Mono',monospace; font-size:11.5px; color:var(--ink-soft); white-space:nowrap; width:96px; text-align:right; }
+.subject-bar-count{ opacity:.7; }
+
+.grade-chart-wrap{ background:var(--paper-raised); border:1px solid var(--grid-line); border-radius:10px; padding:16px 18px; }
+.chart-header{ display:flex; justify-content:flex-end; margin-bottom:6px; }
+.chart-avg{ font-family:'IBM Plex Mono',monospace; font-size:12px; color:var(--ink-soft); font-weight:600; }
+.grade-chart-svg{ width:100%; height:auto; display:block; }
+
+.colle-row{
+  background:var(--paper-raised); border:1px solid var(--grid-line); border-radius:10px;
+  padding:12px 16px; display:flex; align-items:center; gap:14px; margin-bottom:9px; flex-wrap:wrap;
+}
+.colle-grade-badge{
+  font-family:'IBM Plex Mono',monospace; font-weight:700; font-size:14px;
+  padding:6px 11px; border-radius:8px; min-width:54px; text-align:center; flex-shrink:0;
+}
+.colle-grade-badge.good{ background:var(--pen-green-dim); color:var(--pen-green); }
+.colle-grade-badge.mid{ background:var(--amber-dim); color:var(--amber); }
+.colle-grade-badge.bad{ background:var(--pen-red-dim); color:var(--pen-red); }
+.colle-main{ flex:1; min-width:160px; }
+.colle-title{ font-weight:600; font-size:14px; }
+.colle-meta{ font-family:'IBM Plex Mono',monospace; font-size:11px; color:var(--ink-soft); margin-top:2px; }
+.colle-notes{ font-size:12.5px; color:var(--ink-soft); margin-top:4px; font-style:italic; }
+
 /* ---------- Weekly schedule grid ---------- */
 .week-grid{
   display:flex; gap:2px; overflow-x:auto; background:var(--paper-raised);
@@ -452,6 +482,10 @@ let state = {
   showBlockModal: false,
   editingEvent: null,
   showEventModal: false,
+  colles: [],
+  colleFilterSubject: "all",
+  editingColle: null,
+  showColleModal: false,
 };
 
 const el = document.getElementById("app");
@@ -586,6 +620,39 @@ async function deleteEvent(eventId){
   const { error } = await sb.from('events').delete().eq('id', eventId);
   if(error){ toast("Erreur : " + error.message); return; }
   await loadEvents();
+}
+
+/* ---------------- Colles: data loading ---------------- */
+async function loadColles(){
+  const { data, error } = await sb
+    .from('colles')
+    .select('*')
+    .order('colle_date', { ascending: true });
+  if(error){ console.error(error); toast("Erreur de chargement des colles"); return; }
+  state.colles = data || [];
+  render();
+}
+
+/* ---------------- Colles: CRUD ---------------- */
+async function saveColle(colle){
+  const { data: { user } } = await sb.auth.getUser();
+  if(state.editingColle){
+    const { error } = await sb.from('colles').update(colle).eq('id', state.editingColle.id);
+    if(error){ toast("Erreur : " + error.message); return; }
+  } else {
+    const { error } = await sb.from('colles').insert({ ...colle, user_id: user.id });
+    if(error){ toast("Erreur : " + error.message); return; }
+  }
+  state.showColleModal = false;
+  state.editingColle = null;
+  await loadColles();
+}
+
+async function deleteColle(colleId){
+  if(!confirm("Supprimer cette colle ?")) return;
+  const { error } = await sb.from('colles').delete().eq('id', colleId);
+  if(error){ toast("Erreur : " + error.message); return; }
+  await loadColles();
 }
 
 /* ---------------- Auth ---------------- */
@@ -891,6 +958,8 @@ function render(){
   let body = "";
   if(state.section === "planning"){
     body = renderPlanning();
+  } else if(state.section === "colles"){
+    body = renderColles();
   } else {
     if(state.view === "dashboard") body = renderDashboard();
     else if(state.view === "deck") body = renderDeck();
@@ -911,6 +980,7 @@ function render(){
     <div class="section-tabs">
       <button class="section-tab ${state.section === 'fiches' ? 'active' : ''}" id="tab-fiches">Fiches</button>
       <button class="section-tab ${state.section === 'planning' ? 'active' : ''}" id="tab-planning">Planning</button>
+      <button class="section-tab ${state.section === 'colles' ? 'active' : ''}" id="tab-colles">Colles</button>
     </div>
     ${body}
   `;
@@ -918,6 +988,7 @@ function render(){
   document.getElementById('logout-btn')?.addEventListener('click', handleLogout);
   document.getElementById('tab-fiches')?.addEventListener('click', () => { state.section = 'fiches'; render(); });
   document.getElementById('tab-planning')?.addEventListener('click', () => { state.section = 'planning'; render(); });
+  document.getElementById('tab-colles')?.addEventListener('click', () => { state.section = 'colles'; render(); });
   attachViewHandlers();
   attachSymbolToolbars();
   renderLatex(el);
@@ -1402,6 +1473,218 @@ function renderEventModal(){
   `;
 }
 
+/* ---------------- Colles: rendering ---------------- */
+function gradeTier(grade){
+  if(grade >= 14) return 'good';
+  if(grade >= 10) return 'mid';
+  return 'bad';
+}
+function gradeColorVar(grade){
+  const tier = gradeTier(grade);
+  return tier === 'good' ? 'var(--pen-green)' : tier === 'mid' ? 'var(--amber)' : 'var(--pen-red)';
+}
+
+function renderColles(){
+  const subjectsInUse = [...new Set(state.colles.map(c => c.subject))].sort();
+  const totalCount = state.colles.length;
+  const overallAvg = totalCount > 0 ? state.colles.reduce((s,c) => s + Number(c.grade), 0) / totalCount : 0;
+
+  let bestSubject = null;
+  if(subjectsInUse.length > 0){
+    const avgs = subjectsInUse.map(s => {
+      const grades = state.colles.filter(c => c.subject === s).map(c => Number(c.grade));
+      return { subject: s, avg: grades.reduce((a,b) => a+b, 0) / grades.length };
+    });
+    bestSubject = avgs.sort((a,b) => b.avg - a.avg)[0];
+  }
+
+  const filtered = state.colleFilterSubject === 'all'
+    ? state.colles
+    : state.colles.filter(c => c.subject === state.colleFilterSubject);
+
+  return `
+    <div class="stats-row">
+      <div class="stat-card"><div class="num">${totalCount}</div><div class="label">colles passées</div></div>
+      <div class="stat-card due"><div class="num">${totalCount > 0 ? overallAvg.toFixed(1) : '–'}</div><div class="label">moyenne générale</div></div>
+      <div class="stat-card"><div class="num" style="font-size:17px;">${bestSubject ? escapeHtml(bestSubject.subject) : '–'}</div><div class="label">meilleure matière</div></div>
+    </div>
+
+    <div class="section-head">
+      <h2 class="display" style="font-size:20px;">Suivi des notes</h2>
+      <button class="btn btn-outline btn-sm" id="add-colle-btn">+ Ajouter une colle</button>
+    </div>
+
+    ${subjectsInUse.length > 0 ? `
+      <div class="field" style="max-width:280px; margin-bottom:20px;">
+        <label>Filtrer par matière</label>
+        <select id="colle-subject-filter">
+          <option value="all" ${state.colleFilterSubject === 'all' ? 'selected' : ''}>Toutes les matières</option>
+          ${subjectsInUse.map(s => `<option value="${escapeHtml(s)}" ${state.colleFilterSubject === s ? 'selected' : ''}>${escapeHtml(s)}</option>`).join('')}
+        </select>
+      </div>
+    ` : ''}
+
+    ${state.colleFilterSubject === 'all' ? renderSubjectSummaryBars() : renderGradeChartSection(filtered)}
+
+    <div class="section-head" style="margin-top:28px;">
+      <h3 class="display" style="font-size:17px;">Historique</h3>
+    </div>
+    ${renderColleList(filtered)}
+
+    ${state.showColleModal ? renderColleModal() : ""}
+  `;
+}
+
+function renderSubjectSummaryBars(){
+  if(state.colles.length === 0){
+    return `
+      <div class="empty-state">
+        <div class="display">Aucune colle enregistrée</div>
+        <p>Ajoute ta première note pour voir apparaître les statistiques.</p>
+      </div>
+    `;
+  }
+  const bySubject = {};
+  state.colles.forEach(c => {
+    if(!bySubject[c.subject]) bySubject[c.subject] = [];
+    bySubject[c.subject].push(Number(c.grade));
+  });
+  const rows = Object.entries(bySubject).map(([subj, grades]) => ({
+    subj,
+    avg: grades.reduce((a,b) => a+b, 0) / grades.length,
+    count: grades.length,
+  })).sort((a,b) => b.avg - a.avg);
+
+  const bars = rows.map(r => {
+    const pct = (r.avg / 20) * 100;
+    return `
+      <div class="subject-bar-row">
+        <div class="subject-bar-label">${escapeHtml(r.subj)}</div>
+        <div class="subject-bar-track">
+          <div class="subject-bar-fill" style="width:${pct}%; background:${gradeColorVar(r.avg)};"></div>
+        </div>
+        <div class="subject-bar-value">${r.avg.toFixed(1)}/20 <span class="subject-bar-count">(${r.count})</span></div>
+      </div>
+    `;
+  }).join('');
+
+  return `<div class="subject-bars">${bars}</div>`;
+}
+
+function renderGradeChartSection(filtered){
+  if(filtered.length === 0){
+    return `
+      <div class="empty-state">
+        <div class="display">Aucune colle dans cette matière</div>
+        <p>Ajoute une note pour voir la courbe apparaître.</p>
+      </div>
+    `;
+  }
+  const sorted = [...filtered].sort((a,b) => a.colle_date.localeCompare(b.colle_date));
+  const avg = sorted.reduce((s,c) => s + Number(c.grade), 0) / sorted.length;
+  return `
+    <div class="grade-chart-wrap">
+      <div class="chart-header"><span class="chart-avg">Moyenne : ${avg.toFixed(1)}/20</span></div>
+      ${renderGradeChartSvg(sorted)}
+    </div>
+  `;
+}
+
+function renderGradeChartSvg(sortedColles){
+  const width = 640, height = 190, padLeft = 34, padRight = 14, padTop = 14, padBottom = 14;
+  const plotW = width - padLeft - padRight;
+  const plotH = height - padTop - padBottom;
+  const n = sortedColles.length;
+  const xStep = n > 1 ? plotW / (n - 1) : 0;
+
+  const points = sortedColles.map((c, i) => {
+    const grade = Number(c.grade);
+    const x = padLeft + (n > 1 ? i * xStep : plotW / 2);
+    const y = padTop + plotH - (grade / 20) * plotH;
+    return { x, y, grade };
+  });
+
+  const pathD = points.map((p,i) => (i === 0 ? 'M' : 'L') + p.x.toFixed(1) + ',' + p.y.toFixed(1)).join(' ');
+
+  let gridlines = '';
+  [0,5,10,15,20].forEach(v => {
+    const y = padTop + plotH - (v / 20) * plotH;
+    gridlines += `<line x1="${padLeft}" y1="${y.toFixed(1)}" x2="${width - padRight}" y2="${y.toFixed(1)}" stroke="var(--grid-line)" stroke-width="1" />`;
+    gridlines += `<text x="${padLeft - 8}" y="${(y + 3.5).toFixed(1)}" font-size="9.5" fill="var(--ink-soft)" text-anchor="end" font-family="'IBM Plex Mono', monospace">${v}</text>`;
+  });
+
+  const dots = points.map(p =>
+    `<circle cx="${p.x.toFixed(1)}" cy="${p.y.toFixed(1)}" r="4" fill="${gradeColorVar(p.grade)}" stroke="var(--paper-raised)" stroke-width="1.5" />`
+  ).join('');
+
+  return `
+    <svg viewBox="0 0 ${width} ${height}" class="grade-chart-svg" preserveAspectRatio="xMidYMid meet">
+      ${gridlines}
+      <path d="${pathD}" fill="none" stroke="var(--ink-blue)" stroke-width="2" />
+      ${dots}
+    </svg>
+  `;
+}
+
+function renderColleList(filtered){
+  if(filtered.length === 0) return '';
+  const sorted = [...filtered].sort((a,b) => b.colle_date.localeCompare(a.colle_date));
+  const rows = sorted.map(c => {
+    const grade = Number(c.grade);
+    return `
+      <div class="colle-row">
+        <div class="colle-grade-badge ${gradeTier(grade)}">${grade}/20</div>
+        <div class="colle-main">
+          <div class="colle-title">${escapeHtml(c.subject)}${c.topic ? ' · ' + escapeHtml(c.topic) : ''}</div>
+          <div class="colle-meta">${fmtDateFr(c.colle_date)}${c.examiner ? ' · ' + escapeHtml(c.examiner) : ''}</div>
+          ${c.notes ? `<div class="colle-notes">${escapeHtml(c.notes)}</div>` : ''}
+        </div>
+        <div class="card-row-actions">
+          <button class="icon-btn" data-edit-colle="${c.id}" title="Modifier">✎</button>
+          <button class="icon-btn" data-delete-colle="${c.id}" title="Supprimer">✕</button>
+        </div>
+      </div>
+    `;
+  }).join('');
+  return `<div class="card-list">${rows}</div>`;
+}
+
+function renderColleModal(){
+  const c = state.editingColle;
+  const subjOptions = SUBJECTS.map(s => `<option value="${s}" ${c && c.subject === s ? 'selected' : ''}>${s}</option>`).join('');
+  return `
+    <div class="modal-backdrop" id="colle-modal-backdrop">
+      <div class="modal">
+        <h3>${c ? "Modifier la colle" : "Nouvelle colle"}</h3>
+        <form id="colle-form">
+          <div class="bp-row">
+            <div class="bp-field"><label>Matière</label><select id="colle-subject">${subjOptions}</select></div>
+            <div class="bp-field"><label>Date</label><input type="date" id="colle-date" required value="${c?.colle_date || ''}" /></div>
+          </div>
+          <div class="field">
+            <label>Note (/20)</label>
+            <input id="colle-grade" type="number" min="0" max="20" step="0.5" required value="${c?.grade ?? ''}"
+              style="width:100%;padding:11px 12px;border-radius:8px;border:1.5px solid var(--grid-line);font-family:'Inter',sans-serif;font-size:14px;" />
+          </div>
+          <div class="bp-row">
+            <div class="bp-field"><label>Interrogateur (optionnel)</label><input type="text" id="colle-examiner" value="${escapeHtml(c?.examiner || '')}" /></div>
+            <div class="bp-field"><label>Sujet / chapitre (optionnel)</label><input type="text" id="colle-topic" value="${escapeHtml(c?.topic || '')}" /></div>
+          </div>
+          <div class="field">
+            <label>Notes / retours (optionnel)</label>
+            <textarea id="colle-notes" style="min-height:70px;">${escapeHtml(c?.notes || '')}</textarea>
+          </div>
+          <div class="modal-footer">
+            ${c ? `<button type="button" class="btn-danger-text" id="colle-delete" style="margin-right:auto;">Supprimer</button>` : ""}
+            <button type="button" class="btn btn-outline btn-sm" id="colle-cancel">Annuler</button>
+            <button type="submit" class="btn btn-primary btn-sm">Enregistrer</button>
+          </div>
+        </form>
+      </div>
+    </div>
+  `;
+}
+
 /* ---------------- Event delegation ---------------- */
 function attachViewHandlers(){
   // Dashboard
@@ -1591,6 +1874,50 @@ function attachViewHandlers(){
     };
     if(evt.title && evt.event_date) saveEvent(evt);
   });
+
+  // Colles: filter
+  document.getElementById('colle-subject-filter')?.addEventListener('change', (e) => {
+    state.colleFilterSubject = e.target.value; render();
+  });
+
+  // Colles: add/edit/delete
+  document.getElementById('add-colle-btn')?.addEventListener('click', () => {
+    state.editingColle = null; state.showColleModal = true; render();
+  });
+  el.querySelectorAll('[data-edit-colle]').forEach(node => {
+    node.addEventListener('click', () => {
+      const id = node.getAttribute('data-edit-colle');
+      state.editingColle = state.colles.find(c => c.id === id);
+      state.showColleModal = true; render();
+    });
+  });
+  el.querySelectorAll('[data-delete-colle]').forEach(btn => {
+    btn.addEventListener('click', () => deleteColle(btn.getAttribute('data-delete-colle')));
+  });
+  document.getElementById('colle-modal-backdrop')?.addEventListener('click', (e) => {
+    if(e.target.id === 'colle-modal-backdrop'){ state.showColleModal = false; state.editingColle = null; render(); }
+  });
+  document.getElementById('colle-cancel')?.addEventListener('click', () => {
+    state.showColleModal = false; state.editingColle = null; render();
+  });
+  document.getElementById('colle-delete')?.addEventListener('click', async () => {
+    await deleteColle(state.editingColle.id);
+    state.showColleModal = false; state.editingColle = null; render();
+  });
+  document.getElementById('colle-form')?.addEventListener('submit', (e) => {
+    e.preventDefault();
+    const grade = parseFloat(document.getElementById('colle-grade').value);
+    if(isNaN(grade) || grade < 0 || grade > 20){ toast("La note doit être entre 0 et 20"); return; }
+    const colle = {
+      subject: document.getElementById('colle-subject').value,
+      colle_date: document.getElementById('colle-date').value,
+      grade,
+      examiner: document.getElementById('colle-examiner').value.trim(),
+      topic: document.getElementById('colle-topic').value.trim(),
+      notes: document.getElementById('colle-notes').value.trim(),
+    };
+    if(colle.subject && colle.colle_date) saveColle(colle);
+  });
 }
 
 /* ---------------- Boot / auth listener ---------------- */
@@ -1598,7 +1925,7 @@ sb.auth.onAuthStateChange(async (event, session) => {
   if(session?.user){
     state.user = session.user;
     state.view = "dashboard";
-    await Promise.all([loadDecks(), loadScheduleBlocks(), loadEvents()]);
+    await Promise.all([loadDecks(), loadScheduleBlocks(), loadEvents(), loadColles()]);
   } else {
     state.user = null;
     state.view = "auth";
@@ -1611,7 +1938,7 @@ sb.auth.onAuthStateChange(async (event, session) => {
   if(session?.user){
     state.user = session.user;
     state.view = "dashboard";
-    await Promise.all([loadDecks(), loadScheduleBlocks(), loadEvents()]);
+    await Promise.all([loadDecks(), loadScheduleBlocks(), loadEvents(), loadColles()]);
   } else {
     state.view = "auth";
     render();
