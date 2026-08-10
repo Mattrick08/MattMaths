@@ -1,6 +1,6 @@
 {
-  "name": "Fiches — révision espacée",
-  "short_name": "Fiches",
+  "name": "MattMaths — révision espacée",
+  "short_name": "MattMaths",
   "description": "Fiches de révision avec répétition espacée, planning et suivi de colles pour la prépa.",
   "start_url": "./",
   "scope": "./",
