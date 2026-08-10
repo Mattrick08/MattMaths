@@ -86,6 +86,10 @@ h1, h2, h3, .display{
 .brand{ display:flex; align-items:baseline; gap:10px; }
 .brand h1{ font-size: 28px; }
 .brand .tag{ font-size:11px; color:var(--ink-soft); font-family:'IBM Plex Mono',monospace; }
+.offline-badge{
+  font-family:'IBM Plex Mono',monospace; font-size:10px; text-transform:uppercase; letter-spacing:.05em;
+  background: var(--pen-red-dim); color: var(--pen-red); padding:3px 9px; border-radius:12px; margin-left:4px;
+}
 .user-chip{
   display:flex; align-items:center; gap:10px;
   font-family:'IBM Plex Mono', monospace; font-size:12px; color:var(--ink-soft);
@@ -493,6 +497,7 @@ let state = {
   colleFilterSubject: "all",
   editingColle: null,
   showColleModal: false,
+  isOffline: !navigator.onLine,
 };
 
 const el = document.getElementById("app");
@@ -541,13 +546,26 @@ async function loadDecks(){
     .from('decks')
     .select('*, cards(id, next_review_date)')
     .order('created_at', { ascending: true });
-  if(error){ console.error(error); toast("Erreur de chargement des paquets"); return; }
+  if(error){
+    console.error(error);
+    const cached = loadLocalCache('decks');
+    if(cached){
+      state.decks = cached;
+      state.isOffline = true;
+      render();
+      return;
+    }
+    toast("Erreur de chargement des paquets");
+    return;
+  }
+  state.isOffline = false;
   const today = new Date().toISOString().slice(0,10);
   state.decks = (data || []).map(d => ({
     ...d,
     cardCount: d.cards.length,
     dueCount: d.cards.filter(c => c.next_review_date <= today).length,
   }));
+  saveLocalCache('decks', state.decks);
   render();
 }
 
@@ -557,8 +575,21 @@ async function loadCards(deckId){
     .select('*')
     .eq('deck_id', deckId)
     .order('created_at', { ascending: true });
-  if(error){ console.error(error); toast("Erreur de chargement des fiches"); return; }
+  if(error){
+    console.error(error);
+    const cached = loadLocalCache('cards_' + deckId);
+    if(cached){
+      state.cards = cached;
+      state.isOffline = true;
+      render();
+      return;
+    }
+    toast("Erreur de chargement des fiches");
+    return;
+  }
+  state.isOffline = false;
   state.cards = data || [];
+  saveLocalCache('cards_' + deckId, state.cards);
   render();
 }
 
@@ -569,8 +600,15 @@ async function loadScheduleBlocks(){
     .select('*')
     .order('day_of_week', { ascending: true })
     .order('start_time', { ascending: true });
-  if(error){ console.error(error); toast("Erreur de chargement de l'emploi du temps"); return; }
+  if(error){
+    console.error(error);
+    const cached = loadLocalCache('schedule_blocks');
+    if(cached){ state.scheduleBlocks = cached; state.isOffline = true; render(); return; }
+    toast("Erreur de chargement de l'emploi du temps");
+    return;
+  }
   state.scheduleBlocks = data || [];
+  saveLocalCache('schedule_blocks', state.scheduleBlocks);
   render();
 }
 
@@ -580,8 +618,15 @@ async function loadEvents(){
     .select('*')
     .order('event_date', { ascending: true })
     .order('event_time', { ascending: true });
-  if(error){ console.error(error); toast("Erreur de chargement des échéances"); return; }
+  if(error){
+    console.error(error);
+    const cached = loadLocalCache('events');
+    if(cached){ state.events = cached; state.isOffline = true; render(); return; }
+    toast("Erreur de chargement des échéances");
+    return;
+  }
   state.events = data || [];
+  saveLocalCache('events', state.events);
   render();
 }
 
@@ -635,8 +680,15 @@ async function loadColles(){
     .from('colles')
     .select('*')
     .order('colle_date', { ascending: true });
-  if(error){ console.error(error); toast("Erreur de chargement des colles"); return; }
+  if(error){
+    console.error(error);
+    const cached = loadLocalCache('colles');
+    if(cached){ state.colles = cached; state.isOffline = true; render(); return; }
+    toast("Erreur de chargement des colles");
+    return;
+  }
   state.colles = data || [];
+  saveLocalCache('colles', state.colles);
   render();
 }
 
@@ -755,16 +807,27 @@ function flipCard(){
 async function gradeCard(grade){
   const card = state.reviewQueue[state.reviewIndex];
   const updates = applyGrade(card, grade);
+
+  // Apply locally right away so the UI, and the local cache used offline,
+  // reflect the new interval even before the server confirms it.
+  Object.assign(card, updates);
+  const cachedCards = loadLocalCache('cards_' + state.currentDeckId) || [];
+  const idx = cachedCards.findIndex(c => c.id === card.id);
+  if(idx >= 0){
+    cachedCards[idx] = { ...cachedCards[idx], ...updates };
+    saveLocalCache('cards_' + state.currentDeckId, cachedCards);
+  }
+
   const { error } = await sb.from('cards').update(updates).eq('id', card.id);
-  if(error) console.error(error);
+  if(error){
+    console.error(error);
+    queueReviewUpdate(card.id, updates);
+    state.isOffline = true;
+  }
 
   state.reviewIndex += 1;
   state.flipped = false;
-  if(state.reviewIndex >= state.reviewQueue.length){
-    render(); // will show "done" screen
-  } else {
-    render();
-  }
+  render();
 }
 
 async function finishReview(){
@@ -797,6 +860,62 @@ function renderLatex(container){
 
 function escapeHtml(s){
   return (s || "").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
+}
+
+/* ---------------- Offline: local cache + review outbox ---------------- */
+const LOCAL_CACHE_PREFIX = 'mattmaths_cache_';
+const OUTBOX_KEY = 'mattmaths_pending_reviews';
+
+function saveLocalCache(key, data){
+  try{ localStorage.setItem(LOCAL_CACHE_PREFIX + key, JSON.stringify(data)); }
+  catch(e){ console.error('saveLocalCache failed', e); }
+}
+
+function loadLocalCache(key){
+  try{
+    const raw = localStorage.getItem(LOCAL_CACHE_PREFIX + key);
+    return raw ? JSON.parse(raw) : null;
+  }catch(e){ return null; }
+}
+
+function getOutbox(){
+  try{
+    const raw = localStorage.getItem(OUTBOX_KEY);
+    return raw ? JSON.parse(raw) : [];
+  }catch(e){ return []; }
+}
+
+function setOutbox(items){
+  try{ localStorage.setItem(OUTBOX_KEY, JSON.stringify(items)); }
+  catch(e){ console.error('setOutbox failed', e); }
+}
+
+// Queues a card review update to be sent once back online. If the same card
+// is reviewed again before the queue is flushed, the latest update wins.
+function queueReviewUpdate(cardId, updates){
+  const outbox = getOutbox().filter(item => item.cardId !== cardId);
+  outbox.push({ cardId, updates, queuedAt: new Date().toISOString() });
+  setOutbox(outbox);
+}
+
+// Replays queued review updates to Supabase once connectivity is back.
+async function flushOutbox(){
+  const outbox = getOutbox();
+  if(outbox.length === 0) return;
+
+  const remaining = [];
+  for(const item of outbox){
+    const { error } = await sb.from('cards').update(item.updates).eq('id', item.cardId);
+    if(error) remaining.push(item);
+  }
+  setOutbox(remaining);
+  state.isOffline = remaining.length > 0;
+
+  if(remaining.length < outbox.length){
+    toast(`${outbox.length - remaining.length} révision(s) synchronisée(s)`);
+  }
+  if(state.currentDeckId) await loadCards(state.currentDeckId);
+  await loadDecks();
 }
 
 /* ---------------- Math symbol toolbar ---------------- */
@@ -978,6 +1097,7 @@ function render(){
       <div class="brand">
         <h1>MattMaths</h1>
         <span class="tag">révision espacée</span>
+        ${state.isOffline ? `<span class="offline-badge">Hors-ligne</span>` : ''}
       </div>
       <div class="user-chip">
         <span>${escapeHtml(state.user?.email || "")}</span>
@@ -1946,11 +2066,31 @@ sb.auth.onAuthStateChange(async (event, session) => {
     state.user = session.user;
     state.view = "dashboard";
     await Promise.all([loadDecks(), loadScheduleBlocks(), loadEvents(), loadColles()]);
+    if(navigator.onLine) flushOutbox();
   } else {
     state.view = "auth";
     render();
   }
 })();
+
+/* ---------------- Offline support ---------------- */
+if('serviceWorker' in navigator){
+  window.addEventListener('load', () => {
+    navigator.serviceWorker.register('./sw.js').catch((err) => console.error('SW registration failed', err));
+  });
+}
+
+window.addEventListener('online', () => {
+  state.isOffline = false;
+  toast("Connexion rétablie — synchronisation…");
+  flushOutbox();
+  render();
+});
+
+window.addEventListener('offline', () => {
+  state.isOffline = true;
+  render();
+});
 </script>
 </body>
 </html>
