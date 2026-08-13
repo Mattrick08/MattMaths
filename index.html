@@ -457,8 +457,8 @@ select{
 /* ---------- Print / PDF export ---------- */
 @media print{
   body{ background:#fff !important; background-image:none !important; }
-  .topbar, .section-tabs, .formula-toolbar, .back-link, .icon-btn,
-  .formula-chapter-grid, .modal-backdrop{ display:none !important; }
+  .topbar, .section-tabs, .formula-toolbar, .no-print, .back-link, .icon-btn,
+  .formula-chapter-grid, .modal-backdrop, #deck-card-list{ display:none !important; }
   .app{ max-width:100%; padding:0; }
   .print-only{ display:block !important; }
   .formula-card{ break-inside:avoid; box-shadow:none; border:1px solid #ccc; }
@@ -1444,12 +1444,13 @@ function renderDeck(){
         <span class="deck-subject">${escapeHtml(deck.subject)}</span>
         <h2 style="margin-top:8px;">${escapeHtml(deck.name)}</h2>
       </div>
-      <div class="deck-actions">
+      <div class="deck-actions no-print">
+        <button class="btn btn-outline btn-sm" id="export-deck-btn">Exporter en PDF</button>
         <button class="btn btn-outline btn-sm" id="delete-deck-btn">Supprimer le paquet</button>
         <button class="btn btn-primary btn-sm" id="start-review-btn">Réviser (${deck.dueCount})</button>
       </div>
     </div>
-    <div class="section-head">
+    <div class="section-head no-print">
       <h3 class="display" style="font-size:17px;">Fiches</h3>
       <button class="btn btn-outline btn-sm" id="add-card-btn">+ Ajouter une fiche</button>
     </div>
@@ -1458,9 +1459,24 @@ function renderDeck(){
         <div class="display">Aucune fiche</div>
         <p>Ajoute ta première fiche à ce paquet.</p>
       </div>
-    ` : `<div class="card-list">${rows}</div>`}
+    ` : `<div class="card-list" id="deck-card-list">${rows}</div>`}
+    ${renderDeckCardsPrintList(deck)}
     ${state.showCardModal ? renderCardModal() : ""}
   `;
+}
+
+// Full recto/verso content for every card in this deck — hidden on screen,
+// shown only when exporting to PDF, since the on-screen list is a truncated preview.
+function renderDeckCardsPrintList(deck){
+  if(state.cards.length === 0) return '';
+  const rows = state.cards.map(c => `
+    <div class="formula-card">
+      <div class="formula-title">${escapeHtml(c.front)}</div>
+      ${c.chapter ? `<div class="formula-chapter-tag">${escapeHtml(c.chapter)}</div>` : ''}
+      <div class="formula-math" style="margin-top:8px;">${escapeHtml(c.back)}</div>
+    </div>
+  `).join('');
+  return `<div class="print-only"><div class="formula-chapter-heading">${escapeHtml(deck.name)}</div>${rows}</div>`;
 }
 
 function renderCardModal(){
@@ -2220,6 +2236,7 @@ function attachViewHandlers(){
   document.getElementById('back-to-dashboard')?.addEventListener('click', () => {
     state.view = 'dashboard'; state.currentDeckId = null; render();
   });
+  document.getElementById('export-deck-btn')?.addEventListener('click', () => window.print());
   document.getElementById('delete-deck-btn')?.addEventListener('click', () => {
     deleteDeck(state.currentDeckId).then(() => { state.view = 'dashboard'; state.currentDeckId = null; });
   });
