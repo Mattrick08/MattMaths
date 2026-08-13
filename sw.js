@@ -1,4 +1,4 @@
-const CACHE_NAME = 'mattmaths-shell-v2';
+const CACHE_NAME = 'mattmaths-shell-v3';
 
 const SHELL_FILES = [
   './',
