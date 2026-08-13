@@ -420,6 +420,51 @@ select{
 .colle-meta{ font-family:'IBM Plex Mono',monospace; font-size:11px; color:var(--ink-soft); margin-top:2px; }
 .colle-notes{ font-size:12.5px; color:var(--ink-soft); margin-top:4px; font-style:italic; }
 
+/* ---------- Formulaire ---------- */
+.formula-chapter-grid{ display:grid; grid-template-columns: repeat(auto-fill, minmax(180px,1fr)); gap:16px; margin-bottom:28px; }
+.formula-chapter-tile{
+  position:relative;
+  background: var(--paper-raised);
+  border: 1.5px solid var(--ink);
+  border-radius: 10px;
+  padding: 14px 16px 13px;
+  cursor:pointer;
+  transition: transform .15s ease, box-shadow .15s ease;
+  box-shadow: 3px 3px 0 var(--formula-accent, var(--ink-blue-dim));
+}
+.formula-chapter-tile:hover{ transform: translate(-2px,-2px); box-shadow: 5px 5px 0 var(--formula-accent, var(--ink-blue-dim)); }
+.formula-chapter-tile.all-tile{ box-shadow: 3px 3px 0 var(--ink-blue-dim); }
+.formula-chapter-tile h3{ font-size:15.5px; margin-bottom:6px; padding-right:44px; }
+.formula-chapter-tile .fc-count{ font-family:'IBM Plex Mono',monospace; font-size:11px; color:var(--ink-soft); }
+.formula-chapter-tile-actions{ position:absolute; top:10px; right:10px; display:flex; gap:4px; }
+
+.formula-card{
+  background:var(--paper-raised); border:1px solid var(--grid-line); border-radius:10px;
+  padding:14px 18px 12px; margin-bottom:12px; border-left:4px solid var(--formula-accent, var(--ink-blue));
+}
+.formula-card-head{ display:flex; justify-content:space-between; align-items:flex-start; gap:10px; }
+.formula-title{ font-family:'Fraunces',serif; font-weight:600; font-size:15.5px; }
+.formula-chapter-tag{ font-family:'IBM Plex Mono',monospace; font-size:10.5px; color:var(--ink-soft); text-transform:uppercase; letter-spacing:.05em; margin-top:2px; }
+.formula-math{ font-size:16px; margin:10px 0 4px; overflow-x:auto; padding-bottom:2px; }
+.formula-note{ font-size:12.5px; color:var(--ink-soft); font-style:italic; border-top:1px dashed var(--grid-line); padding-top:7px; margin-top:8px; white-space:pre-wrap; }
+.formula-chapter-heading{
+  font-family:'Fraunces',serif; font-weight:600; font-size:16px; color:var(--ink);
+  margin:26px 0 12px; padding-bottom:6px; border-bottom:1.5px solid var(--ink);
+}
+.formula-chapter-heading:first-child{ margin-top:0; }
+.print-only{ display:none; }
+
+/* ---------- Print / PDF export ---------- */
+@media print{
+  body{ background:#fff !important; background-image:none !important; }
+  .topbar, .section-tabs, .formula-toolbar, .back-link, .icon-btn,
+  .formula-chapter-grid, .modal-backdrop{ display:none !important; }
+  .app{ max-width:100%; padding:0; }
+  .print-only{ display:block !important; }
+  .formula-card{ break-inside:avoid; box-shadow:none; border:1px solid #ccc; }
+  .formula-chapter-heading{ break-after:avoid; }
+}
+
 /* ---------- Weekly schedule grid ---------- */
 .week-grid{
   display:flex; gap:2px; overflow-x:auto; background:var(--paper-raised);
@@ -517,8 +562,22 @@ let state = {
   colleFilterSubject: "all",
   editingColle: null,
   showColleModal: false,
+  formulaChapters: [],
+  formulas: [],
+  formulaireView: "chapters", // chapters | chapter
+  currentFormulaChapterId: null,
+  editingFormulaChapter: null,
+  showFormulaChapterModal: false,
+  editingFormula: null,
+  showFormulaModal: false,
   isOffline: !navigator.onLine,
 };
+
+const FORMULA_ACCENTS = ["var(--ink-blue-dim)","var(--pen-red-dim)","var(--amber-dim)","var(--pen-green-dim)","#8B6FA8"];
+function formulaAccent(chapterId){
+  const idx = state.formulaChapters.findIndex(c => c.id === chapterId);
+  return FORMULA_ACCENTS[(idx >= 0 ? idx : 0) % FORMULA_ACCENTS.length];
+}
 
 const el = document.getElementById("app");
 
@@ -732,6 +791,94 @@ async function deleteColle(colleId){
   const { error } = await sb.from('colles').delete().eq('id', colleId);
   if(error){ toast("Erreur : " + error.message); return; }
   await loadColles();
+}
+
+/* ---------------- Formulaire: data loading ---------------- */
+async function loadFormulaChapters(){
+  const { data, error } = await sb
+    .from('formula_chapters')
+    .select('*')
+    .order('sort_order', { ascending: true });
+  if(error){
+    console.error(error);
+    const cached = loadLocalCache('formula_chapters');
+    if(cached){ state.formulaChapters = cached; state.isOffline = true; render(); return; }
+    toast("Erreur de chargement des chapitres");
+    return;
+  }
+  state.formulaChapters = data || [];
+  saveLocalCache('formula_chapters', state.formulaChapters);
+  render();
+}
+
+async function loadFormulas(){
+  const { data, error } = await sb
+    .from('formulas')
+    .select('*')
+    .order('created_at', { ascending: true });
+  if(error){
+    console.error(error);
+    const cached = loadLocalCache('formulas');
+    if(cached){ state.formulas = cached; state.isOffline = true; render(); return; }
+    toast("Erreur de chargement des formules");
+    return;
+  }
+  state.formulas = data || [];
+  saveLocalCache('formulas', state.formulas);
+  render();
+}
+
+/* ---------------- Formulaire: chapter CRUD ---------------- */
+async function saveFormulaChapter(name){
+  const { data: { user } } = await sb.auth.getUser();
+  if(state.editingFormulaChapter){
+    const { error } = await sb.from('formula_chapters').update({ name }).eq('id', state.editingFormulaChapter.id);
+    if(error){ toast("Erreur : " + error.message); return; }
+  } else {
+    const sort_order = state.formulaChapters.length;
+    const { error } = await sb.from('formula_chapters').insert({ name, sort_order, user_id: user.id });
+    if(error){ toast("Erreur : " + error.message); return; }
+  }
+  state.showFormulaChapterModal = false;
+  state.editingFormulaChapter = null;
+  await loadFormulaChapters();
+}
+
+async function deleteFormulaChapter(chapterId){
+  const count = state.formulas.filter(f => f.chapter_id === chapterId).length;
+  const msg = count > 0
+    ? `Supprimer ce chapitre et ses ${count} formule(s) ?`
+    : "Supprimer ce chapitre ?";
+  if(!confirm(msg)) return;
+  const { error } = await sb.from('formula_chapters').delete().eq('id', chapterId);
+  if(error){ toast("Erreur : " + error.message); return; }
+  if(state.currentFormulaChapterId === chapterId){
+    state.formulaireView = "chapters";
+    state.currentFormulaChapterId = null;
+  }
+  await Promise.all([loadFormulaChapters(), loadFormulas()]);
+}
+
+/* ---------------- Formulaire: formula CRUD ---------------- */
+async function saveFormula(formula){
+  const { data: { user } } = await sb.auth.getUser();
+  if(state.editingFormula){
+    const { error } = await sb.from('formulas').update(formula).eq('id', state.editingFormula.id);
+    if(error){ toast("Erreur : " + error.message); return; }
+  } else {
+    const { error } = await sb.from('formulas').insert({ ...formula, user_id: user.id });
+    if(error){ toast("Erreur : " + error.message); return; }
+  }
+  state.showFormulaModal = false;
+  state.editingFormula = null;
+  await loadFormulas();
+}
+
+async function deleteFormula(formulaId){
+  if(!confirm("Supprimer cette formule ?")) return;
+  const { error } = await sb.from('formulas').delete().eq('id', formulaId);
+  if(error){ toast("Erreur : " + error.message); return; }
+  await loadFormulas();
 }
 
 /* ---------------- Auth ---------------- */
@@ -1128,6 +1275,8 @@ function render(){
     body = renderPlanning();
   } else if(state.section === "colles"){
     body = renderColles();
+  } else if(state.section === "formulaire"){
+    body = renderFormulaire();
   } else {
     if(state.view === "dashboard") body = renderDashboard();
     else if(state.view === "deck") body = renderDeck();
@@ -1150,6 +1299,7 @@ function render(){
       <button class="section-tab ${state.section === 'fiches' ? 'active' : ''}" id="tab-fiches">Fiches</button>
       <button class="section-tab ${state.section === 'planning' ? 'active' : ''}" id="tab-planning">Planning</button>
       <button class="section-tab ${state.section === 'colles' ? 'active' : ''}" id="tab-colles">Colles</button>
+      <button class="section-tab ${state.section === 'formulaire' ? 'active' : ''}" id="tab-formulaire">Formulaire</button>
     </div>
     ${body}
   `;
@@ -1158,6 +1308,7 @@ function render(){
   document.getElementById('tab-fiches')?.addEventListener('click', () => { state.section = 'fiches'; render(); });
   document.getElementById('tab-planning')?.addEventListener('click', () => { state.section = 'planning'; render(); });
   document.getElementById('tab-colles')?.addEventListener('click', () => { state.section = 'colles'; render(); });
+  document.getElementById('tab-formulaire')?.addEventListener('click', () => { state.section = 'formulaire'; render(); });
   attachViewHandlers();
   attachSymbolToolbars();
   renderLatex(el);
@@ -1860,6 +2011,170 @@ function renderColleModal(){
   `;
 }
 
+/* ---------------- Formulaire: rendering ---------------- */
+function renderFormulaire(){
+  if(state.formulaireView === "chapter" && state.currentFormulaChapterId){
+    return renderFormulaChapterDetail();
+  }
+  return renderFormulaChaptersGrid();
+}
+
+function renderFormulaChaptersGrid(){
+  const tiles = state.formulaChapters.map((c,i) => {
+    const count = state.formulas.filter(f => f.chapter_id === c.id).length;
+    return `
+      <div class="formula-chapter-tile" style="--formula-accent:${FORMULA_ACCENTS[i % FORMULA_ACCENTS.length]}" data-open-formula-chapter="${c.id}">
+        <div class="formula-chapter-tile-actions">
+          <button class="icon-btn" data-edit-formula-chapter="${c.id}" title="Renommer">✎</button>
+          <button class="icon-btn" data-delete-formula-chapter="${c.id}" title="Supprimer">✕</button>
+        </div>
+        <h3>${escapeHtml(c.name)}</h3>
+        <div class="fc-count">${count} formule${count !== 1 ? 's' : ''}</div>
+      </div>
+    `;
+  }).join('');
+
+  return `
+    <div class="section-head">
+      <h2 class="display" style="font-size:20px;">Formulaire</h2>
+      <div style="display:flex; gap:8px; flex-wrap:wrap;">
+        <button class="btn btn-outline btn-sm formula-toolbar" id="export-formulaire-btn">Exporter en PDF</button>
+        <button class="btn btn-outline btn-sm formula-toolbar" id="add-formula-chapter-btn">+ Chapitre</button>
+      </div>
+    </div>
+    ${state.formulaChapters.length === 0 ? `
+      <div class="empty-state">
+        <div class="display">Aucun chapitre pour l'instant</div>
+        <p>Crée un chapitre pour commencer ton formulaire (ex : Analyse, Algèbre…).</p>
+      </div>
+    ` : `<div class="formula-chapter-grid">${tiles}</div>`}
+    ${renderAllFormulasList()}
+    ${state.showFormulaChapterModal ? renderFormulaChapterModal() : ""}
+  `;
+}
+
+function renderFormulaChapterDetail(){
+  const chapter = state.formulaChapters.find(c => c.id === state.currentFormulaChapterId);
+  if(!chapter) return `<p>Chapitre introuvable.</p>`;
+  const formulas = state.formulas.filter(f => f.chapter_id === chapter.id);
+  const rows = formulas.map(f => formulaCardHtml(f)).join('');
+
+  return `
+    <button class="back-link" id="back-to-formula-chapters">← Tous les chapitres</button>
+    <div class="deck-header">
+      <div><h2 style="margin-top:8px;">${escapeHtml(chapter.name)}</h2></div>
+      <div class="deck-actions">
+        <button class="btn btn-outline btn-sm formula-toolbar" id="export-formulaire-btn">Exporter en PDF</button>
+        <button class="btn btn-primary btn-sm formula-toolbar" id="add-formula-btn">+ Formule</button>
+      </div>
+    </div>
+    ${formulas.length === 0 ? `
+      <div class="empty-state">
+        <div class="display">Aucune formule ici</div>
+        <p>Ajoute ta première formule à ce chapitre.</p>
+      </div>
+    ` : rows}
+    ${state.showFormulaModal ? renderFormulaModal() : ""}
+  `;
+}
+
+// Full formulaire grouped by chapter — hidden on screen, shown when printing/exporting to PDF
+// so export works no matter which view (chapters grid or a single chapter) is on screen.
+function renderAllFormulasList(){
+  if(state.formulas.length === 0) return '';
+  let html = '';
+  state.formulaChapters.forEach(c => {
+    const formulas = state.formulas.filter(f => f.chapter_id === c.id);
+    if(formulas.length === 0) return;
+    html += `<div class="formula-chapter-heading">${escapeHtml(c.name)}</div>`;
+    formulas.forEach(f => html += formulaCardHtml(f));
+  });
+  return `<div class="print-only">${html}</div>`;
+}
+
+function formulaCardHtml(f){
+  const chapter = state.formulaChapters.find(c => c.id === f.chapter_id);
+  return `
+    <div class="formula-card" style="--formula-accent:${formulaAccent(f.chapter_id)}">
+      <div class="formula-card-head">
+        <div>
+          <div class="formula-title">${escapeHtml(f.title)}</div>
+          <div class="formula-chapter-tag">${chapter ? escapeHtml(chapter.name) : ''}</div>
+        </div>
+        <div class="card-row-actions">
+          <button class="icon-btn" data-edit-formula="${f.id}" title="Modifier">✎</button>
+          <button class="icon-btn" data-delete-formula="${f.id}" title="Supprimer">✕</button>
+        </div>
+      </div>
+      <div class="formula-math">${escapeHtml(wrapLatexForDisplay(f.latex))}</div>
+      ${f.note ? `<div class="formula-note">${escapeHtml(f.note)}</div>` : ""}
+    </div>
+  `;
+}
+
+// If the user already used $...$ / $$...$$ delimiters, leave as-is; otherwise
+// wrap the whole thing as display math so plain LaTeX "just works".
+function wrapLatexForDisplay(raw){
+  if(!raw) return '';
+  return raw.includes('$') ? raw : `$$${raw}$$`;
+}
+
+function renderFormulaChapterModal(){
+  const c = state.editingFormulaChapter;
+  return `
+    <div class="modal-backdrop" id="formula-chapter-modal-backdrop">
+      <div class="modal">
+        <h3>${c ? "Renommer le chapitre" : "Nouveau chapitre"}</h3>
+        <form id="formula-chapter-form">
+          <div class="field">
+            <label>Nom du chapitre</label>
+            <input id="formula-chapter-name" type="text" required value="${escapeHtml(c?.name || '')}" placeholder="Ex : Intégrales"
+              style="width:100%;padding:11px 12px;border-radius:8px;border:1.5px solid var(--grid-line);font-family:'Inter',sans-serif;font-size:14px;" />
+          </div>
+          <div class="modal-footer">
+            <button type="button" class="btn btn-outline btn-sm" id="formula-chapter-cancel">Annuler</button>
+            <button type="submit" class="btn btn-primary btn-sm">Enregistrer</button>
+          </div>
+        </form>
+      </div>
+    </div>
+  `;
+}
+
+function renderFormulaModal(){
+  const f = state.editingFormula;
+  return `
+    <div class="modal-backdrop" id="formula-modal-backdrop">
+      <div class="modal">
+        <h3>${f ? "Modifier la formule" : "Nouvelle formule"}</h3>
+        <form id="formula-form">
+          <div class="field">
+            <label>Titre</label>
+            <input id="formula-title" type="text" required value="${escapeHtml(f?.title || '')}" placeholder="Ex : Dérivée d'un produit"
+              style="width:100%;padding:11px 12px;border-radius:8px;border:1.5px solid var(--grid-line);font-family:'Inter',sans-serif;font-size:14px;" />
+          </div>
+          <div class="field">
+            <label>LaTeX</label>
+            ${symbolToolbarHtml('formula-latex')}
+            <textarea id="formula-latex" placeholder="Ex : (uv)' = u'v + uv'  — ou utilise $...$ / $$...$$ toi-même">${escapeHtml(f?.latex || "")}</textarea>
+            <div class="preview-box" id="formula-preview"></div>
+            <div class="hint">Sans $ ni $$, la formule entière est affichée en mode display automatiquement.</div>
+          </div>
+          <div class="field">
+            <label>Note (optionnel)</label>
+            <textarea id="formula-note" style="min-height:56px;">${escapeHtml(f?.note || '')}</textarea>
+          </div>
+          <div class="modal-footer">
+            ${f ? `<button type="button" class="btn-danger-text" id="formula-delete" style="margin-right:auto;">Supprimer</button>` : ""}
+            <button type="button" class="btn btn-outline btn-sm" id="formula-cancel">Annuler</button>
+            <button type="submit" class="btn btn-primary btn-sm">Enregistrer</button>
+          </div>
+        </form>
+      </div>
+    </div>
+  `;
+}
+
 /* ---------------- Event delegation ---------------- */
 function attachViewHandlers(){
   // Dashboard
@@ -2110,6 +2425,94 @@ function attachViewHandlers(){
     };
     if(colle.subject && colle.colle_date) saveColle(colle);
   });
+
+  // Formulaire: navigation
+  el.querySelectorAll('[data-open-formula-chapter]').forEach(node => {
+    node.addEventListener('click', () => {
+      state.currentFormulaChapterId = node.getAttribute('data-open-formula-chapter');
+      state.formulaireView = 'chapter';
+      render();
+    });
+  });
+  document.getElementById('back-to-formula-chapters')?.addEventListener('click', () => {
+    state.formulaireView = 'chapters'; state.currentFormulaChapterId = null; render();
+  });
+  document.getElementById('export-formulaire-btn')?.addEventListener('click', () => window.print());
+
+  // Formulaire: chapters
+  document.getElementById('add-formula-chapter-btn')?.addEventListener('click', () => {
+    state.editingFormulaChapter = null; state.showFormulaChapterModal = true; render();
+  });
+  el.querySelectorAll('[data-edit-formula-chapter]').forEach(btn => {
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const id = btn.getAttribute('data-edit-formula-chapter');
+      state.editingFormulaChapter = state.formulaChapters.find(c => c.id === id);
+      state.showFormulaChapterModal = true; render();
+    });
+  });
+  el.querySelectorAll('[data-delete-formula-chapter]').forEach(btn => {
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      deleteFormulaChapter(btn.getAttribute('data-delete-formula-chapter'));
+    });
+  });
+  document.getElementById('formula-chapter-modal-backdrop')?.addEventListener('click', (e) => {
+    if(e.target.id === 'formula-chapter-modal-backdrop'){ state.showFormulaChapterModal = false; state.editingFormulaChapter = null; render(); }
+  });
+  document.getElementById('formula-chapter-cancel')?.addEventListener('click', () => {
+    state.showFormulaChapterModal = false; state.editingFormulaChapter = null; render();
+  });
+  document.getElementById('formula-chapter-form')?.addEventListener('submit', (e) => {
+    e.preventDefault();
+    const name = document.getElementById('formula-chapter-name').value.trim();
+    if(name) saveFormulaChapter(name);
+  });
+
+  // Formulaire: formulas
+  document.getElementById('add-formula-btn')?.addEventListener('click', () => {
+    state.editingFormula = null; state.showFormulaModal = true; render();
+  });
+  el.querySelectorAll('[data-edit-formula]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const id = btn.getAttribute('data-edit-formula');
+      state.editingFormula = state.formulas.find(f => f.id === id);
+      state.showFormulaModal = true; render();
+    });
+  });
+  el.querySelectorAll('[data-delete-formula]').forEach(btn => {
+    btn.addEventListener('click', () => deleteFormula(btn.getAttribute('data-delete-formula')));
+  });
+  document.getElementById('formula-modal-backdrop')?.addEventListener('click', (e) => {
+    if(e.target.id === 'formula-modal-backdrop'){ state.showFormulaModal = false; state.editingFormula = null; render(); }
+  });
+  document.getElementById('formula-cancel')?.addEventListener('click', () => {
+    state.showFormulaModal = false; state.editingFormula = null; render();
+  });
+  document.getElementById('formula-delete')?.addEventListener('click', async () => {
+    await deleteFormula(state.editingFormula.id);
+    state.showFormulaModal = false; state.editingFormula = null; render();
+  });
+  document.getElementById('formula-form')?.addEventListener('submit', (e) => {
+    e.preventDefault();
+    const title = document.getElementById('formula-title').value.trim();
+    const latex = document.getElementById('formula-latex').value.trim();
+    const note = document.getElementById('formula-note').value.trim();
+    if(!title || !latex) return;
+    const chapter_id = state.editingFormula ? state.editingFormula.chapter_id : state.currentFormulaChapterId;
+    saveFormula({ title, latex, note, chapter_id });
+  });
+  // Live LaTeX preview
+  const formulaTa = document.getElementById('formula-latex');
+  if(formulaTa){
+    const updateFormulaPreview = () => {
+      const fp = document.getElementById('formula-preview');
+      fp.textContent = wrapLatexForDisplay(formulaTa.value);
+      renderLatex(fp);
+    };
+    formulaTa.addEventListener('input', updateFormulaPreview);
+    updateFormulaPreview();
+  }
 }
 
 /* ---------------- Boot / auth listener ---------------- */
@@ -2117,7 +2520,7 @@ sb.auth.onAuthStateChange(async (event, session) => {
   if(session?.user){
     state.user = session.user;
     state.view = "dashboard";
-    await Promise.all([loadDecks(), loadScheduleBlocks(), loadEvents(), loadColles()]);
+    await Promise.all([loadDecks(), loadScheduleBlocks(), loadEvents(), loadColles(), loadFormulaChapters(), loadFormulas()]);
   } else {
     state.user = null;
     state.view = "auth";
@@ -2130,7 +2533,7 @@ sb.auth.onAuthStateChange(async (event, session) => {
   if(session?.user){
     state.user = session.user;
     state.view = "dashboard";
-    await Promise.all([loadDecks(), loadScheduleBlocks(), loadEvents(), loadColles()]);
+    await Promise.all([loadDecks(), loadScheduleBlocks(), loadEvents(), loadColles(), loadFormulaChapters(), loadFormulas()]);
     if(navigator.onLine) flushOutbox();
   } else {
     state.view = "auth";
